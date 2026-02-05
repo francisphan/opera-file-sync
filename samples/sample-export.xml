@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OTA_HotelResNotifRQ xmlns="http://www.opentravel.org/OTA/2003/05">
+  <HotelReservations>
+    <HotelReservation>
+      <ResGlobalInfo>
+        <HotelReservationIDs>
+          <HotelReservationID>123456</HotelReservationID>
+        </HotelReservationIDs>
+      </ResGlobalInfo>
+      <ResGuests>
+        <ResGuest>
+          <Profiles>
+            <ProfileInfo>
+              <Profile>
+                <Customer>
+                  <PersonName>
+                    <GivenName>John</GivenName>
+                    <Surname>Smith</Surname>
+                  </PersonName>
+                  <Email>john.smith@example.com</Email>
+                  <Telephone PhoneNumber="555-1234"/>
+                </Customer>
+              </Profile>
+            </ProfileInfo>
+          </Profiles>
+        </ResGuest>
+      </ResGuests>
+      <RoomStays>
+        <RoomStay>
+          <TimeSpan Start="2024-02-10" End="2024-02-12"/>
+          <RoomTypes>
+            <RoomType RoomTypeCode="KING"/>
+          </RoomTypes>
+        </RoomStay>
+      </RoomStays>
+    </HotelReservation>
+    <HotelReservation>
+      <ResGlobalInfo>
+        <HotelReservationIDs>
+          <HotelReservationID>123457</HotelReservationID>
+        </HotelReservationIDs>
+      </ResGlobalInfo>
+      <ResGuests>
+        <ResGuest>
+          <Profiles>
+            <ProfileInfo>
+              <Profile>
+                <Customer>
+                  <PersonName>
+                    <GivenName>Jane</GivenName>
+                    <Surname>Doe</Surname>
+                  </PersonName>
+                  <Email>jane.doe@example.com</Email>
+                  <Telephone PhoneNumber="555-5678"/>
+                </Customer>
+              </Profile>
+            </ProfileInfo>
+          </Profiles>
+        </ResGuest>
+      </ResGuests>
+      <RoomStays>
+        <RoomStay>
+          <TimeSpan Start="2024-02-11" End="2024-02-13"/>
+          <RoomTypes>
+            <RoomType RoomTypeCode="QUEEN"/>
+          </RoomTypes>
+        </RoomStay>
+      </RoomStays>
+    </HotelReservation>
+  </HotelReservations>
+</OTA_HotelResNotifRQ>
