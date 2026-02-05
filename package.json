@@ -1,0 +1,48 @@
+{
+  "name": "opera-file-sync",
+  "version": "1.0.0",
+  "description": "Standalone script to sync OPERA file exports to Salesforce",
+  "main": "opera-file-sync.js",
+  "bin": {
+    "opera-sync": "./opera-file-sync.js"
+  },
+  "scripts": {
+    "start": "node opera-file-sync.js",
+    "test": "node test-connection.js",
+    "test:notifications": "node test-notifications.js",
+    "build:bundle": "ncc build opera-file-sync.js -o dist",
+    "build:exe": "pkg . --targets node18-win-x64 --output dist/opera-sync.exe",
+    "build:all": "npm run build:bundle && npm run build:exe",
+    "build:linux": "pkg . --targets node18-linux-x64 --output dist/opera-sync-linux",
+    "build:macos": "pkg . --targets node18-macos-x64 --output dist/opera-sync-macos"
+  },
+  "pkg": {
+    "assets": [
+      "node_modules/**/*"
+    ],
+    "outputPath": "dist"
+  },
+  "keywords": [
+    "opera",
+    "salesforce",
+    "pms",
+    "sync",
+    "integration"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "jsforce": "^2.0.0",
+    "dotenv": "^16.4.5",
+    "csv-parser": "^3.0.0",
+    "fast-xml-parser": "^4.3.5",
+    "chokidar": "^3.6.0",
+    "winston": "^3.11.0",
+    "nodemailer": "^6.9.8",
+    "axios": "^1.6.5"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.1",
+    "pkg": "^5.8.1"
+  }
+}

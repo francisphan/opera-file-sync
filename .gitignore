@@ -1,0 +1,28 @@
+# Environment
+.env
+
+# Logs
+logs/
+*.log
+
+# Node modules
+node_modules/
+
+# File tracking
+processed-files.json
+
+# Test directories
+exports/
+processed/
+failed/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
