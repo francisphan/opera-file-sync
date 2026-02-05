@@ -1,362 +1,552 @@
 # OPERA File Export to Salesforce Sync
 
-AWS Lambda integration to sync OPERA PMS **batch file exports** to Salesforce.
+Standalone script that syncs OPERA PMS batch file exports to Salesforce. Perfect for OPERA installations **without OXI license** that use scheduled file exports.
+
+---
+
+## Features
+
+- ✅ **File-based sync** - No OXI license required
+- ✅ **Multiple formats** - CSV and XML support
+- ✅ **Automatic file watching** - Processes files as they appear
+- ✅ **Deduplication** - Prevents duplicate processing
+- ✅ **Smart error handling** - Failed files moved to separate directory
+- ✅ **Email/Slack notifications** - Get alerted when issues occur
+- ✅ **Standalone executable** - Single .exe file, no Node.js required
+- ✅ **Windows Service** - Runs in background, auto-starts with server
+- ✅ **Comprehensive logging** - Full audit trail
+
+---
+
+## Quick Start
+
+### 1. Install Dependencies
+
+```bash
+npm install
+```
+
+### 2. Get Salesforce Credentials
+
+```bash
+# Run OAuth helper to get refresh token
+node get-refresh-token.js
+```
+
+Follow the prompts to log in to Salesforce and get your credentials.
+
+### 3. Configure Environment
+
+```bash
+# Copy example configuration
+cp .env.example .env
+
+# Edit with your settings
+nano .env
+```
+
+**Minimum required settings:**
+```bash
+SF_INSTANCE_URL=https://your-instance.salesforce.com
+SF_CLIENT_ID=your-client-id
+SF_CLIENT_SECRET=your-client-secret
+SF_REFRESH_TOKEN=your-refresh-token
+
+EXPORT_DIR=C:\OPERA\Exports\Reservations
+PROCESSED_DIR=C:\OPERA\Exports\Processed
+FAILED_DIR=C:\OPERA\Exports\Failed
+```
+
+### 4. Update Field Mappings
+
+**IMPORTANT:** You must configure field mappings based on your OPERA export format.
+
+1. Get a sample OPERA export file
+2. Open `src/parsers/csv-parser.js` or `xml-parser.js`
+3. Update the `transformRecord` function with your field mappings
+
+See `FIELD_MAPPING.md` for detailed instructions.
+
+### 5. Test Connection
+
+```bash
+npm run test
+```
+
+### 6. Test with Sample File
+
+```bash
+# Place a test file in the export directory
+cp samples/sample-export.csv exports/
+
+# Run the script
+npm start
+```
+
+Check logs and Salesforce to verify records were created.
+
+### 7. Build Standalone Executable (Optional)
+
+```bash
+npm run build:exe
+```
+
+This creates `dist/opera-sync.exe` - a single file you can copy to the OPERA server.
+
+### 8. Deploy to OPERA Server
+
+See `BUILD.md` and `WINDOWS_SERVICE.md` for deployment instructions.
+
+---
 
 ## Architecture
-
-This solution is designed for OPERA on-premises installations **without OXI** that use scheduled file exports.
 
 ```
 OPERA Server
     ↓ (scheduled export every 4 hours)
-File Share / FTP / SFTP
-    ↓ (AWS CLI sync or manual upload)
-S3 Bucket (opera-exports)
-    ↓ (S3 Event → EventBridge)
-Lambda (FileProcessor)
-    ↓ (parse CSV/XML, create events)
-SQS Queue (opera-events-queue)
-    ↓ (batch processing)
-Lambda (SalesforceProcessor)
-    ↓
+Export Directory (C:\OPERA\Exports\)
+    ↓ (file watcher detects new files)
+Node.js Script / Standalone .exe
+    ↓ (parse CSV/XML, transform data)
+Salesforce API
+    ↓ (upsert records)
 Salesforce
 ```
 
-## Key Differences from Webhook Integration
-
-| Feature | Webhook (OXI) | File Export (This Repo) |
-|---------|---------------|-------------------------|
-| **Latency** | Real-time (seconds) | Batch (hours) |
-| **OPERA License** | Requires OXI | Standard OPERA |
-| **Cost** | OXI license $$$$ | AWS only (~$10/month) |
-| **Complexity** | Simple | Moderate |
-| **Use Case** | Real-time sync needed | Batch sync acceptable |
-
-## Supported File Formats
-
-- **CSV** - Comma-separated values
-- **XML** - OTA format (same as OXI)
-- **Fixed-width text** - Legacy OPERA exports
-- **Custom delimited** - Configurable
-
-## Components
-
-### 1. S3 Bucket
-- Receives OPERA export files
-- EventBridge integration for automatic processing
-- Lifecycle policies for archival
-
-### 2. File Processor Lambda
-- Triggered by S3 uploads
-- Parses CSV/XML files
-- Extracts individual records
-- Sends to SQS queue
-
-### 3. SQS Queue + Processor
-- Same queue/processor as webhook integration
-- Handles deduplication
-- Syncs to Salesforce
-
-### 4. File Upload Options
-
-**Option A: AWS CLI Sync** (Recommended)
-```bash
-# Run on server with access to OPERA exports
-aws s3 sync /path/to/opera-exports s3://opera-exports-bucket/ \
-  --exclude "*.tmp" \
-  --exclude "processed/*"
-```
-
-**Option B: AWS Transfer Family (SFTP)**
-- OPERA uploads directly to AWS-managed SFTP
-- Files automatically land in S3
-
-**Option C: Manual Upload**
-- Upload files via AWS Console or scripts
-
-## Prerequisites
-
-- OPERA on-premises with export interface configured
-- AWS account with appropriate permissions
-- AWS CLI installed (for file sync)
-- Node.js 20+ (for local development)
-- AWS SAM CLI (for deployment)
-
-## Quick Start
-
-### 1. Configure OPERA Exports
-
-In OPERA, set up scheduled exports:
-1. Navigate to **Configuration > Interfaces**
-2. Create new interface:
-   - Type: **Reservation Export**
-   - Format: **CSV** or **XML (OTA)**
-   - Schedule: **Every 4 hours** (or as needed)
-   - Output: **Network share or FTP**
-
-### 2. Deploy AWS Infrastructure
-
-```bash
-# Install dependencies
-npm install
-
-# Build Lambda functions
-npm run build
-
-# Deploy with SAM
-sam build
-sam deploy --guided
-```
-
-### 3. Set Up File Sync
-
-**Option A: Scheduled AWS CLI sync**
-
-Create a cron job on the server with OPERA export access:
-
-```bash
-# Edit crontab
-crontab -e
-
-# Add sync job (every 15 minutes)
-*/15 * * * * aws s3 sync /opera/exports s3://YOUR-BUCKET-NAME/ --exclude "*.tmp"
-```
-
-**Option B: Use AWS Transfer Family**
-
-1. Deploy SFTP endpoint (included in template)
-2. Configure OPERA to export to SFTP
-3. Files automatically process on arrival
-
-### 4. Configure Salesforce Secrets
-
-Same as webhook integration:
-
-```bash
-aws secretsmanager create-secret \
-  --name opera-sync/salesforce \
-  --secret-string '{
-    "instanceUrl": "https://your-instance.salesforce.com",
-    "clientId": "your-client-id",
-    "clientSecret": "your-client-secret",
-    "refreshToken": "your-refresh-token"
-  }'
-```
-
-## File Format Examples
-
-### CSV Format
-
-```csv
-ReservationID,GuestFirstName,GuestLastName,Email,Phone,ArrivalDate,DepartureDate,RoomType,Status
-123456,John,Smith,john@example.com,555-1234,2026-02-10,2026-02-12,KING,RESERVED
-123457,Jane,Doe,jane@example.com,555-5678,2026-02-11,2026-02-13,QUEEN,CONFIRMED
-```
-
-### XML Format (OTA)
-
-```xml
-<?xml version="1.0"?>
-<OTA_HotelResNotifRQ>
-  <HotelReservations>
-    <HotelReservation>
-      <ResGlobalInfo>
-        <HotelReservationIDs>
-          <HotelReservationID>123456</HotelReservationID>
-        </HotelReservationIDs>
-      </ResGlobalInfo>
-      <ResGuests>
-        <ResGuest>
-          <Profiles>
-            <ProfileInfo>
-              <Profile>
-                <Customer>
-                  <PersonName>
-                    <GivenName>John</GivenName>
-                    <Surname>Smith</Surname>
-                  </PersonName>
-                  <Email>john@example.com</Email>
-                  <Telephone>555-1234</Telephone>
-                </Customer>
-              </Profile>
-            </ProfileInfo>
-          </Profiles>
-        </ResGuest>
-      </ResGuests>
-    </HotelReservation>
-  </HotelReservations>
-</OTA_HotelResNotifRQ>
-```
-
-## Deduplication
-
-The file processor tracks processed files to prevent duplicate records:
-- **DynamoDB table** stores file checksums
-- Files with same checksum are skipped
-- Configurable retention (default: 30 days)
-
-## Monitoring
-
-### CloudWatch Alarms
-
-- **File Processing Errors** - Alert when Lambda fails to process files
-- **Large File Warnings** - Alert for files >100MB
-- **Processing Lag** - Alert when files aren't processed within SLA
-- **DLQ Messages** - Alert when records fail Salesforce sync
-
-### Metrics
-
-- Files processed per hour
-- Records extracted per file
-- Processing duration
-- Salesforce sync success rate
-
-## Cost Estimate
-
-**Typical monthly costs for 1000 reservations/day:**
-
-- S3 storage (10 GB): $0.23
-- S3 requests: $0.05
-- Lambda (file processor): $0.50
-- Lambda (Salesforce processor): $1.00
-- SQS: $0.10
-- DynamoDB (deduplication): $0.25
-- EventBridge: $0.05
-- **Total: ~$2.20/month**
-
-Add ~$15/month for AWS Transfer Family if using SFTP option.
-
-## Comparison to Webhook Integration
-
-**Use File Export When:**
-- ✅ No OXI license available
-- ✅ Batch sync is acceptable (hourly/daily)
-- ✅ Lower cost is priority
-- ✅ Existing export processes in place
-
-**Use Webhook Integration When:**
-- ✅ Real-time sync required
-- ✅ OXI license available
-- ✅ Simpler architecture preferred
-- ✅ Event-driven processing needed
-
-## Migration Path
-
-Start with file exports, migrate to webhooks later:
-
-1. **Deploy this solution** for immediate integration
-2. **Measure pain points** (delays, complexity)
-3. **Build business case** for OXI
-4. **Purchase OXI license** when justified
-5. **Switch to webhook integration** (same Salesforce processor)
-
-## Configuration
-
-### SAM Parameters
-
-```bash
-sam deploy --parameter-overrides \
-  SalesforceSecretName=opera-sync/salesforce \
-  AlertEmails=admin@example.com \
-  SlackWebhookUrl=https://hooks.slack.com/... \
-  FileProcessingTimeout=300 \
-  MaxFileSizeMB=100
-```
-
-### Environment Variables
-
-- `SALESFORCE_SECRET_NAME` - Secrets Manager secret name
-- `SQS_QUEUE_URL` - Target SQS queue
-- `FILE_FORMAT` - Default format (csv, xml, auto)
-- `DEDUP_TABLE_NAME` - DynamoDB table for deduplication
-
-## Troubleshooting
-
-### Files not processing
-
-1. Check S3 bucket EventBridge configuration
-2. Verify Lambda has S3 read permissions
-3. Check CloudWatch logs for errors
-
-### Duplicate records in Salesforce
-
-1. Verify deduplication table is working
-2. Check file naming patterns (should be unique)
-3. Ensure checksum calculation is consistent
-
-### Large files timing out
-
-1. Increase Lambda timeout (max 15 minutes)
-2. Consider splitting large files
-3. Use Lambda with more memory (faster processing)
-
-### Files stuck in S3
-
-1. Check Lambda execution role permissions
-2. Verify file format is supported
-3. Check for malformed data in files
-
-## Development
-
-```bash
-# Install dependencies
-npm install
-
-# Run tests
-npm test
-
-# Local development
-sam local invoke FileProcessorFunction --event events/s3-event.json
-
-# Watch for changes
-npm run watch
-```
+**File flow:**
+1. OPERA creates export file → `Reservations/`
+2. Script processes file
+3. Success → moves to `Processed/`
+4. Failure → moves to `Failed/` + sends alert
+
+---
 
 ## Project Structure
 
 ```
 opera-file-sync/
+├── opera-file-sync.js          # Main entry point
+├── get-refresh-token.js        # OAuth helper
+├── test-connection.js          # Test Salesforce connection
+├── test-notifications.js       # Test email/Slack alerts
+├── package.json                # Dependencies & build scripts
+├── .env.example                # Configuration template
+│
 ├── src/
-│   ├── file-processor/
-│   │   ├── handler.ts          # S3 event handler
-│   │   ├── parsers/
-│   │   │   ├── csv-parser.ts   # CSV file parser
-│   │   │   ├── xml-parser.ts   # XML file parser
-│   │   │   └── fixed-width.ts  # Fixed-width parser
-│   │   └── deduplication.ts    # File dedup logic
-│   ├── salesforce-processor/   # Same as webhook integration
-│   └── shared/                 # Shared utilities
-├── template.yaml               # SAM infrastructure
-├── scripts/
-│   ├── sync-files.sh          # Sync script for cron
-│   └── test-upload.sh         # Test file upload
+│   ├── logger.js               # Logging system
+│   ├── file-tracker.js         # Deduplication tracking
+│   ├── salesforce-client.js    # Salesforce API wrapper
+│   ├── notifier.js             # Email/Slack notifications
+│   └── parsers/
+│       ├── csv-parser.js       # CSV file parser
+│       └── xml-parser.js       # XML file parser
+│
+├── samples/
+│   ├── sample-export.csv       # Example CSV file
+│   └── sample-export.xml       # Example XML file
+│
 └── docs/
-    ├── OPERA_EXPORT_CONFIG.md  # OPERA configuration guide
-    └── FILE_FORMATS.md         # Supported formats
+    ├── README.md               # This file
+    ├── SETUP_CHECKLIST.md      # What's needed to deploy
+    ├── FIELD_MAPPING.md        # How to configure field mappings
+    ├── SALESFORCE_OAUTH_SETUP.md  # OAuth setup guide
+    ├── NOTIFICATIONS.md        # Email/Slack setup (quick)
+    ├── EMAIL_SETUP.md          # Email setup (detailed)
+    ├── BUILD.md                # How to build executable
+    ├── WINDOWS_SERVICE.md      # Run as Windows Service
+    └── INTEGRATION_OPTIONS.md  # All sync approaches
 ```
+
+---
+
+## Documentation Guide
+
+**Start here:**
+1. **`SETUP_CHECKLIST.md`** - What do you need to configure?
+2. **`SALESFORCE_OAUTH_SETUP.md`** - Get Salesforce credentials
+3. **`FIELD_MAPPING.md`** - Configure field mappings (critical!)
+4. **`NOTIFICATIONS.md`** - Set up email alerts (optional)
+
+**For deployment:**
+5. **`BUILD.md`** - Create standalone executable
+6. **`WINDOWS_SERVICE.md`** - Run as background service
+
+**Reference:**
+- **`INTEGRATION_OPTIONS.md`** - Compare all sync approaches
+- **`EMAIL_SETUP.md`** - Detailed email configuration
+
+---
+
+## Configuration
+
+All configuration is in `.env` file:
+
+### Required
+
+```bash
+# Salesforce
+SF_INSTANCE_URL=https://your-instance.salesforce.com
+SF_CLIENT_ID=...
+SF_CLIENT_SECRET=...
+SF_REFRESH_TOKEN=...
+
+# Directories
+EXPORT_DIR=C:\OPERA\Exports\Reservations
+PROCESSED_DIR=C:\OPERA\Exports\Processed
+FAILED_DIR=C:\OPERA\Exports\Failed
+```
+
+### Optional
+
+```bash
+# File Processing
+FILE_FORMAT=auto                    # csv, xml, or auto
+SYNC_MODE=upsert                    # upsert or insert
+SF_EXTERNAL_ID_FIELD=OPERA_Reservation_ID__c
+BATCH_SIZE=200                      # Records per Salesforce batch
+
+# Logging
+LOG_LEVEL=warn                      # error, warn, info, debug
+
+# Email Notifications
+EMAIL_ENABLED=true
+SMTP_HOST=smtp.gmail.com
+SMTP_USER=your-email@gmail.com
+SMTP_PASSWORD=your-app-password
+EMAIL_TO=admin@yourcompany.com
+
+# Error Behavior
+ERROR_THRESHOLD=3                   # Errors before notification
+ERROR_NOTIFICATION_THROTTLE=15      # Minutes between notifications
+```
+
+---
+
+## Testing
+
+### Test Salesforce Connection
+
+```bash
+npm run test
+```
+
+Verifies credentials and API access.
+
+### Test Email Notifications
+
+```bash
+npm run test:notifications
+```
+
+Sends test email and Slack message.
+
+### Test File Processing
+
+```bash
+# Use sample files
+cp samples/sample-export.csv exports/
+npm start
+
+# Check results
+cat logs/opera-sync.log
+```
+
+---
+
+## Deployment Options
+
+### Option 1: Standalone Executable (Recommended)
+
+**Pros:** No Node.js installation required on server
+
+```bash
+# Build
+npm run build:exe
+
+# Deploy
+copy dist\opera-sync.exe \\opera-server\C$\OPERA\Sync\
+copy .env \\opera-server\C$\OPERA\Sync\
+
+# Run on server
+.\opera-sync.exe
+```
+
+**File size:** ~80 MB (includes Node.js runtime)
+
+### Option 2: Node.js Script
+
+**Pros:** Smaller file size, easier to update
+
+```bash
+# Copy source files to server
+# Install Node.js on server
+npm install --production
+node opera-file-sync.js
+```
+
+### Option 3: Bundled JavaScript
+
+**Pros:** Single JS file, still requires Node.js
+
+```bash
+npm run build:bundle
+# Creates dist/index.js (~10 MB)
+```
+
+See `BUILD.md` for detailed deployment instructions.
+
+---
+
+## Running as Windows Service
+
+Use NSSM (recommended):
+
+```powershell
+# Install NSSM
+# Download from https://nssm.cc/
+
+# Create service
+nssm install OperaSalesforceSync "C:\OPERA\Sync\opera-sync.exe"
+nssm set OperaSalesforceSync AppDirectory "C:\OPERA\Sync"
+nssm set OperaSalesforceSync Start SERVICE_AUTO_START
+
+# Start service
+nssm start OperaSalesforceSync
+```
+
+See `WINDOWS_SERVICE.md` for complete instructions.
+
+---
+
+## Monitoring
+
+### Logs
+
+**Console output:**
+- Errors and warnings (default LOG_LEVEL=warn)
+
+**File logs:**
+- `logs/opera-sync.log` - All activity
+- `logs/opera-sync-errors.log` - Errors only
+
+**View logs:**
+```bash
+# Tail logs
+tail -f logs/opera-sync.log
+
+# Windows
+Get-Content logs\opera-sync.log -Wait -Tail 20
+```
+
+### Email Notifications
+
+Automatic alerts when:
+- File processing fails (after 3 consecutive errors)
+- Salesforce connection fails
+- System recovers from errors
+
+Configure in `.env`:
+```bash
+EMAIL_ENABLED=true
+SMTP_HOST=smtp.gmail.com
+SMTP_USER=your-email@gmail.com
+SMTP_PASSWORD=your-app-password
+EMAIL_TO=admin@yourcompany.com
+```
+
+See `NOTIFICATIONS.md` for setup instructions.
+
+### File Tracking
+
+**Processed files:**
+- Moved to `PROCESSED_DIR`
+- Tracked in `processed-files.json` (prevents re-processing)
+
+**Failed files:**
+- Moved to `FAILED_DIR`
+- Review and re-process manually
+
+---
+
+## Troubleshooting
+
+### "Cannot connect to Salesforce"
+
+**Check:**
+- Credentials in `.env` are correct
+- Run `npm run test` to verify
+- Refresh token hasn't been revoked
+
+**Fix:**
+- Re-run `node get-refresh-token.js`
+- Update `.env` with new credentials
+
+### "No records found in file"
+
+**Check:**
+- File format matches parser (CSV vs XML)
+- Field mappings are correct
+- File has data rows (not just headers)
+
+**Fix:**
+- Review logs for parsing errors
+- Check `src/parsers/` field mappings
+- See `FIELD_MAPPING.md`
+
+### "Required field missing"
+
+**Check:**
+- Salesforce object has all required fields
+- Parser is mapping all required fields
+
+**Fix:**
+- Add missing fields to Salesforce
+- Update parser to map required fields
+
+### Email notifications not working
+
+**Check:**
+- `EMAIL_ENABLED=true` in `.env`
+- SMTP credentials are correct
+- For Gmail: Using App Password (not regular password)
+
+**Fix:**
+- Run `npm run test:notifications`
+- See `EMAIL_SETUP.md` troubleshooting section
+
+---
+
+## FAQ
+
+**Q: Do I need OXI license?**
+A: No! This uses OPERA's standard file export feature.
+
+**Q: How often does it sync?**
+A: As often as OPERA creates exports. Typical: every 2-4 hours.
+
+**Q: Can I run this without Node.js on the server?**
+A: Yes! Build the standalone .exe: `npm run build:exe`
+
+**Q: What if the same file is exported twice?**
+A: File deduplication prevents re-processing based on checksums.
+
+**Q: Does it handle errors gracefully?**
+A: Yes. Failed files move to Failed directory, you get email alerts, and processing continues.
+
+**Q: Can I sync to custom Salesforce objects?**
+A: Yes! Update the parser to map to your custom object fields.
+
+**Q: What about real-time sync?**
+A: This is batch-based (hourly/daily). For real-time, see OXI webhooks approach in `INTEGRATION_OPTIONS.md`.
+
+**Q: Can I use this with Salesforce sandbox?**
+A: Yes! Just use your sandbox credentials when running `get-refresh-token.js`.
+
+---
+
+## Cost
+
+**Infrastructure:** $0 (runs on OPERA server or any Windows server)
+
+**Licenses:** $0 (uses standard OPERA export, no OXI required)
+
+**AWS:** Not needed
+
+**Total:** Free! 🎉
+
+---
+
+## Comparison to OXI Webhooks
+
+| Feature | This Solution (File Export) | OXI Webhooks |
+|---------|----------------------------|--------------|
+| **Latency** | Hours (batch) | Seconds (real-time) |
+| **Cost** | $0 | $$$$ (OXI license) |
+| **Setup** | Moderate | Simple |
+| **OPERA License** | Standard | Requires OXI |
+| **Infrastructure** | On-premises script | AWS Lambda |
+
+**Use this if:** Batch sync is acceptable, no OXI budget
+
+**Use OXI if:** Real-time sync required, OXI already licensed
+
+See `INTEGRATION_OPTIONS.md` for detailed comparison.
+
+---
 
 ## Security
 
-- S3 bucket encryption at rest (SSE-S3)
-- Files automatically deleted after processing (configurable retention)
-- Secrets stored in AWS Secrets Manager
-- Lambda functions run with least privilege IAM roles
-- VPC support available for database access
+- ✅ Credentials stored in `.env` (not in code)
+- ✅ File permissions: `chmod 600 .env`
+- ✅ Salesforce OAuth 2.0 with refresh tokens
+- ✅ SMTP authentication for emails
+- ✅ TLS encryption for all API calls
+- ✅ Audit trail in logs
 
-## Limitations
+**Best practices:**
+- Never commit `.env` to git
+- Use AWS Secrets Manager for production (if deploying to AWS)
+- Rotate refresh tokens periodically
+- Use Windows file permissions to protect `.env`
 
-- **Not real-time** - Delays based on export frequency
-- **File size limits** - Lambda has 15-minute timeout
-- **Format dependencies** - Requires consistent OPERA export format
-- **Manual setup** - File sync requires configuration
+---
 
 ## Support
 
-For issues or questions:
-- GitHub Issues: [Link to repo]
-- Documentation: See `/docs` folder
-- Related: [opera-to-salesforce-sync](../opera-to-salesforce-sync) - Webhook version
+**Issues:**
+- Check `SETUP_CHECKLIST.md` - What's still needed?
+- Review logs: `logs/opera-sync.log`
+- See troubleshooting section above
+
+**Documentation:**
+- `SETUP_CHECKLIST.md` - Setup guide
+- `FIELD_MAPPING.md` - Configure parsers
+- `EMAIL_SETUP.md` - Email alerts
+- `BUILD.md` - Deployment
+
+---
+
+## Roadmap
+
+**Completed:**
+- ✅ CSV and XML parsing
+- ✅ File watching and processing
+- ✅ Salesforce sync with upsert
+- ✅ Email and Slack notifications
+- ✅ Standalone executable builds
+- ✅ Comprehensive logging
+- ✅ Error handling and recovery
+
+**Potential Future Enhancements:**
+- Daily summary emails
+- Salesforce custom object templates
+- Multiple export directory watching
+- SFTP file retrieval
+- Database direct connection option
+
+---
 
 ## License
 
 MIT
+
+---
+
+## Getting Started Checklist
+
+- [ ] Install dependencies: `npm install`
+- [ ] Get Salesforce credentials: `node get-refresh-token.js`
+- [ ] Copy `.env.example` to `.env`
+- [ ] Update `.env` with credentials and paths
+- [ ] Get sample OPERA export file
+- [ ] Update field mappings in `src/parsers/`
+- [ ] Test connection: `npm run test`
+- [ ] Test with sample file
+- [ ] Configure email notifications (optional)
+- [ ] Build executable: `npm run build:exe`
+- [ ] Deploy to OPERA server
+- [ ] Set up as Windows Service
+- [ ] Monitor for 24 hours
+- [ ] Done! 🚀
+
+**Next step:** See `SETUP_CHECKLIST.md` for detailed setup guide.
