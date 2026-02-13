@@ -25,10 +25,10 @@ const open = require('open');
 
 const CONFIG = {
   // Consumer Key from your Salesforce Connected App
-  CLIENT_ID: 'YOUR_CONSUMER_KEY_HERE',
+  CLIENT_ID: process.env.SF_CLIENT_ID || 'YOUR_CONSUMER_KEY_HERE',
 
   // Consumer Secret from your Salesforce Connected App
-  CLIENT_SECRET: 'YOUR_CONSUMER_SECRET_HERE',
+  CLIENT_SECRET: process.env.SF_CLIENT_SECRET || 'YOUR_CONSUMER_SECRET_HERE',
 
   // Callback URL (must match Connected App configuration)
   REDIRECT_URI: 'http://localhost:3000/oauth/callback',
@@ -72,10 +72,10 @@ const app = express();
 
 // OAuth2 configuration
 const oauth2 = new jsforce.OAuth2({
+  loginUrl: CONFIG.INSTANCE_URL,
   clientId: CONFIG.CLIENT_ID,
   clientSecret: CONFIG.CLIENT_SECRET,
-  redirectUri: CONFIG.REDIRECT_URI,
-  loginUrl: CONFIG.INSTANCE_URL
+  redirectUri: CONFIG.REDIRECT_URI
 });
 
 // OAuth callback handler
@@ -326,7 +326,7 @@ const server = app.listen(CONFIG.PORT, async () => {
 
   // Generate authorization URL
   const authUrl = oauth2.getAuthorizationUrl({
-    scope: 'api refresh_token offline_access'
+    scope: 'full refresh_token offline_access'
   });
 
   console.log('\n📱 Opening browser to Salesforce login...\n');

@@ -16,12 +16,14 @@ class SalesforceClient {
 
       this.connection = new jsforce.Connection({
         oauth2: {
+          loginUrl: 'https://login.salesforce.com',
           clientId: this.config.clientId,
           clientSecret: this.config.clientSecret,
           redirectUri: 'http://localhost:3000/oauth/callback'
         },
         instanceUrl: this.config.instanceUrl,
-        refreshToken: this.config.refreshToken
+        refreshToken: this.config.refreshToken,
+        version: '59.0'
       });
 
       // Test connection by getting identity
