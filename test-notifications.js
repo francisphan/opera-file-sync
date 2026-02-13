@@ -21,16 +21,26 @@ async function testNotifications() {
   if (process.env.EMAIL_ENABLED === 'true') {
     logger.info('\n📧 Testing Email...');
 
-    if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.EMAIL_TO) {
+    const hasGmailOAuth = !!(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_REFRESH_TOKEN);
+    const hasSMTP = !!(process.env.SMTP_HOST && process.env.SMTP_PASSWORD);
+
+    if (!process.env.SMTP_USER || !process.env.EMAIL_TO) {
       logger.error('❌ Email is enabled but missing required configuration:');
-      logger.error('   - SMTP_HOST');
-      logger.error('   - SMTP_USER');
-      logger.error('   - SMTP_PASSWORD');
-      logger.error('   - EMAIL_TO');
+      logger.error('   - SMTP_USER (your email address)');
+      logger.error('   - EMAIL_TO (recipient email)');
+      if (!hasGmailOAuth && !hasSMTP) {
+        logger.error('   - Either Gmail OAuth (GMAIL_CLIENT_ID, GMAIL_REFRESH_TOKEN)');
+        logger.error('   - Or SMTP credentials (SMTP_HOST, SMTP_PASSWORD)');
+      }
     } else {
       logger.info('Email Configuration:');
-      logger.info(`  SMTP Host: ${process.env.SMTP_HOST}:${process.env.SMTP_PORT}`);
-      logger.info(`  SMTP User: ${process.env.SMTP_USER}`);
+      if (hasGmailOAuth) {
+        logger.info(`  Method: Gmail API (OAuth2)`);
+      } else if (hasSMTP) {
+        logger.info(`  Method: SMTP`);
+        logger.info(`  SMTP Host: ${process.env.SMTP_HOST}:${process.env.SMTP_PORT}`);
+      }
+      logger.info(`  User: ${process.env.SMTP_USER}`);
       logger.info(`  From: ${process.env.EMAIL_FROM || process.env.SMTP_USER}`);
       logger.info(`  To: ${process.env.EMAIL_TO}`);
 
@@ -41,10 +51,10 @@ async function testNotifications() {
       } else {
         logger.error('❌ Email test failed. Check the error above.');
         logger.error('\nCommon issues:');
-        logger.error('  - Gmail: Enable "Less secure app access" or use App Password');
-        logger.error('  - Outlook: Ensure account allows SMTP');
+        logger.error('  - Gmail OAuth: Ensure OAuth credentials are valid and not expired');
+        logger.error('  - SMTP: Check host, port, and credentials');
         logger.error('  - Network: Check firewall/proxy settings');
-        logger.error('  - Credentials: Verify username and password');
+        logger.error('  - Permissions: Verify Gmail API scope includes gmail.send');
       }
     }
   } else {

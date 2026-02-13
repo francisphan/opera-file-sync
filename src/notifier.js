@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 const axios = require('axios');
 const logger = require('./logger');
+const { google } = require('googleapis');
 
 class Notifier {
   constructor() {
@@ -9,18 +10,48 @@ class Notifier {
 
     // Email configuration
     if (this.emailEnabled) {
-      this.emailConfig = {
-        host: process.env.SMTP_HOST,
-        port: parseInt(process.env.SMTP_PORT) || 587,
-        secure: process.env.SMTP_SECURE === 'true',
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASSWORD
-        }
-      };
+      // Check if using Gmail OAuth or standard SMTP
+      const useGmailOAuth = !!(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_REFRESH_TOKEN);
+
+      if (useGmailOAuth) {
+        // Gmail OAuth2 configuration - use Gmail API instead of SMTP
+        logger.info('Gmail OAuth credentials detected - configuring Gmail API');
+        logger.debug(`Client ID: ${process.env.GMAIL_CLIENT_ID?.substring(0, 20)}...`);
+        logger.debug(`Refresh Token: ${process.env.GMAIL_REFRESH_TOKEN?.substring(0, 20)}...`);
+
+        // Set up Gmail API client
+        this.useGmailAPI = true;
+        this.oauth2Client = new google.auth.OAuth2(
+          process.env.GMAIL_CLIENT_ID,
+          process.env.GMAIL_CLIENT_SECRET,
+          'http://localhost:3000/oauth/callback'
+        );
+        this.oauth2Client.setCredentials({
+          refresh_token: process.env.GMAIL_REFRESH_TOKEN
+        });
+
+        logger.info('Using Gmail API for email');
+      } else {
+        // Standard SMTP configuration
+        this.emailConfig = {
+          host: process.env.SMTP_HOST,
+          port: parseInt(process.env.SMTP_PORT) || 587,
+          secure: process.env.SMTP_SECURE === 'true',
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASSWORD
+          }
+        };
+        logger.info('Using SMTP for email');
+      }
+
       this.emailFrom = process.env.EMAIL_FROM || process.env.SMTP_USER;
       this.emailTo = process.env.EMAIL_TO;
-      this.transporter = nodemailer.createTransport(this.emailConfig);
+
+      // Only create nodemailer transporter if not using Gmail API
+      if (!this.useGmailAPI) {
+        this.transporter = nodemailer.createTransport(this.emailConfig);
+      }
     }
 
     // Slack configuration
@@ -50,8 +81,13 @@ class Notifier {
     }
 
     try {
-      await this.transporter.verify();
-      logger.info('Email configuration is valid');
+      // Verify SMTP transport if using SMTP
+      if (!this.useGmailAPI && this.transporter) {
+        await this.transporter.verify();
+        logger.info('SMTP configuration is valid');
+      } else if (this.useGmailAPI) {
+        logger.info('Gmail API configured');
+      }
 
       // Send test email
       await this.sendEmail(
@@ -99,20 +135,62 @@ class Notifier {
     }
 
     try {
-      const info = await this.transporter.sendMail({
-        from: this.emailFrom,
-        to: this.emailTo,
-        subject: subject,
-        text: textBody,
-        html: htmlBody
-      });
+      if (this.useGmailAPI) {
+        // Use Gmail API
+        return await this._sendViaGmailAPI(subject, textBody, htmlBody);
+      } else {
+        // Use SMTP
+        const info = await this.transporter.sendMail({
+          from: this.emailFrom,
+          to: this.emailTo,
+          subject: subject,
+          text: textBody,
+          html: htmlBody
+        });
 
-      logger.debug(`Email sent: ${info.messageId}`);
-      return true;
+        logger.debug(`Email sent: ${info.messageId}`);
+        return true;
+      }
     } catch (err) {
       logger.error('Failed to send email:', err);
       return false;
     }
+  }
+
+  /**
+   * Send email via Gmail API (OAuth2)
+   */
+  async _sendViaGmailAPI(subject, textBody, htmlBody) {
+    const gmail = google.gmail({ version: 'v1', auth: this.oauth2Client });
+
+    // Create MIME message
+    const message = [
+      `From: ${this.emailFrom}`,
+      `To: ${this.emailTo}`,
+      `Subject: ${subject}`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      htmlBody || textBody
+    ].join('\n');
+
+    // Encode message in base64url
+    const encodedMessage = Buffer.from(message)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    // Send via Gmail API
+    const res = await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: {
+        raw: encodedMessage
+      }
+    });
+
+    logger.debug(`Email sent via Gmail API: ${res.data.id}`);
+    return true;
   }
 
   /**
