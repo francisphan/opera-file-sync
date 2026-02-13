@@ -26,3 +26,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+dist/deploy/opera-sync.exe
+dist/opera-sync.exe

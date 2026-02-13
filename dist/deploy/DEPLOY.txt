@@ -1,0 +1,161 @@
+================================================================================
+OPERA File Sync - Deployment Instructions for Windows Server
+================================================================================
+
+DEPLOYMENT PACKAGE CONTENTS:
+  - opera-sync.exe     (Main executable - no Node.js installation needed!)
+  - .env.example       (Configuration template)
+
+================================================================================
+STEP 1: Copy Files to OPERA Server
+================================================================================
+
+1. Copy these files to the OPERA server at:
+   D:\opera-sync\
+
+2. Your directory structure should be:
+   D:\opera-sync\
+   ├── opera-sync.exe
+   └── .env
+
+================================================================================
+STEP 2: Configure .env File
+================================================================================
+
+1. Rename .env.example to .env
+
+2. Verify these settings in .env:
+
+   # Export paths (already configured for server)
+   EXPORT_DIR=D:\MICROS\opera\export\OPERA\vines
+   PROCESSED_DIR=D:\MICROS\opera\export\OPERA\vines\processed
+   FAILED_DIR=D:\MICROS\opera\export\OPERA\vines\failed
+
+   # Salesforce credentials (already configured)
+   SF_INSTANCE_URL=https://thevinesofmendoza2.my.salesforce.com
+   SF_CLIENT_ID=<your client id>
+   SF_CLIENT_SECRET=<your client secret>
+   SF_REFRESH_TOKEN=<your refresh token>
+
+   # Email notifications (already configured)
+   SMTP_USER=francis.phan@vinesofmendoza.com
+   GMAIL_CLIENT_ID=<your gmail client id>
+   GMAIL_CLIENT_SECRET=<your gmail client secret>
+   GMAIL_REFRESH_TOKEN=<your gmail refresh token>
+   EMAIL_TO=francis.phan@vinesofmendoza.com,carlos.ferrer@vinesofmendoza.com
+
+================================================================================
+STEP 3: Test the Application
+================================================================================
+
+1. Open PowerShell or Command Prompt
+2. Navigate to: cd D:\opera-sync
+3. Run: .\opera-sync.exe
+
+The application will:
+  - Test Salesforce connection
+  - Test email notifications
+  - Start watching for new customers*.csv files
+  - Automatically process files when they appear
+  - Send email alerts on errors
+
+Press Ctrl+C to stop.
+
+================================================================================
+STEP 4: Set Up as Windows Service (Optional but Recommended)
+================================================================================
+
+To run automatically in the background:
+
+1. Download NSSM (Non-Sucking Service Manager):
+   https://nssm.cc/download
+
+2. Extract nssm.exe to D:\opera-sync\
+
+3. Open PowerShell as Administrator
+
+4. Install service:
+   D:\opera-sync\nssm.exe install OPERASync
+
+5. Configure in the GUI that opens:
+   - Path: D:\opera-sync\opera-sync.exe
+   - Startup directory: D:\opera-sync
+   - Service name: OPERASync
+
+6. Click "Install service"
+
+7. Start the service:
+   nssm start OPERASync
+
+8. Check status:
+   nssm status OPERASync
+
+================================================================================
+IMPORTANT NOTES
+================================================================================
+
+✅ What it does:
+  - Watches D:\MICROS\opera\export\OPERA\vines\ for new customers*.csv files
+  - Automatically finds matching invoices*.csv files
+  - Joins customer + invoice data
+  - Syncs to TVRS_Guest__c in Salesforce
+  - Moves processed files to /processed folder
+  - Moves failed files to /failed folder
+  - Sends email alerts on errors (after 3 consecutive failures)
+
+✅ What gets synced:
+  - Email (used as unique identifier)
+  - First Name, Last Name
+  - City, State, Country
+  - Check-in Date, Check-out Date
+  - All required boolean fields (set to false)
+
+✅ Logging:
+  - Console output shows real-time activity
+  - Logs saved to: D:\opera-sync\logs\opera-sync.log
+  - Error logs: D:\opera-sync\logs\opera-sync-errors.log
+  - Log rotation: 10MB max, 5 files kept
+
+✅ File Processing:
+  - Only processes customers*.csv files (not invoices)
+  - Invoices are automatically joined
+  - Files are tracked to prevent re-processing
+  - Waits 2 seconds after file appears (ensures complete write)
+
+⚠️  Security:
+  - Keep .env file secure (contains OAuth tokens)
+  - Set file permissions: Right-click .env → Properties → Security
+  - Only SYSTEM and Administrators should have access
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Problem: "Cannot connect to Salesforce"
+Solution: Check SF_REFRESH_TOKEN hasn't expired. Re-run OAuth flow if needed.
+
+Problem: "Email notifications not working"
+Solution: Check GMAIL_REFRESH_TOKEN. Test with: node test-notifications.js
+
+Problem: "No files being processed"
+Solution:
+  - Check EXPORT_DIR path is correct
+  - Ensure files are named customers*.csv (e.g., customers20260212.csv)
+  - Check logs in D:\opera-sync\logs\
+
+Problem: Service won't start
+Solution:
+  - Check Windows Event Viewer for errors
+  - Verify .env file exists in same directory as .exe
+  - Run manually first to test: .\opera-sync.exe
+
+================================================================================
+SUPPORT
+================================================================================
+
+For issues or questions:
+  - Check logs first: D:\opera-sync\logs\opera-sync.log
+  - Review FAILED_DIR for failed files and error messages
+  - Contact: francis.phan@vinesofmendoza.com
+
+================================================================================
