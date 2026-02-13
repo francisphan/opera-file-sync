@@ -1,0 +1,665 @@
+{
+  "objectName": "TVRS_Guest__c",
+  "objectLabel": "TVRS Guest",
+  "fields": [
+    {
+      "name": "Id",
+      "label": "Record ID",
+      "type": "id",
+      "length": 18,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "OwnerId",
+      "label": "Owner ID",
+      "type": "reference",
+      "length": 18,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "IsDeleted",
+      "label": "Deleted",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Name",
+      "label": "TVRS Guest Record",
+      "type": "string",
+      "length": 80,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "CreatedDate",
+      "label": "Created Date",
+      "type": "datetime",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "CreatedById",
+      "label": "Created By ID",
+      "type": "reference",
+      "length": 18,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "LastModifiedDate",
+      "label": "Last Modified Date",
+      "type": "datetime",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "LastModifiedById",
+      "label": "Last Modified By ID",
+      "type": "reference",
+      "length": 18,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "SystemModstamp",
+      "label": "System Modstamp",
+      "type": "datetime",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "LastActivityDate",
+      "label": "Last Activity Date",
+      "type": "date",
+      "length": 0,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "LastViewedDate",
+      "label": "Last Viewed Date",
+      "type": "datetime",
+      "length": 0,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "LastReferencedDate",
+      "label": "Last Referenced Date",
+      "type": "datetime",
+      "length": 0,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Room__c",
+      "label": "Room Occupancy",
+      "type": "percent",
+      "length": 0,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Check_In_Date__c",
+      "label": "Check In Date",
+      "type": "date",
+      "length": 0,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Check_Out_Date__c",
+      "label": "Check Out Date",
+      "type": "date",
+      "length": 0,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Guest_Last_Name__c",
+      "label": "Guest Last Name",
+      "type": "string",
+      "length": 255,
+      "required": false,
+      "externalId": true,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Guest_First_Name__c",
+      "label": "Guest First Name",
+      "type": "string",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Villa_number__c",
+      "label": "Villa #",
+      "type": "string",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Future_Sales_Prospect__c",
+      "label": "Future Sales Prospect",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "TVG__c",
+      "label": "TVG",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Greeted_at_Check_In__c",
+      "label": "Greeted at Check In",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Received_PV_Explanation__c",
+      "label": "Received PV Explanation",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Vineyard_Tour__c",
+      "label": "Vineyard Tour",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Did_TVG_Tasting_With_Sales_Rep__c",
+      "label": "Did TVG Tasting With Sales Rep",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Did_TVG_Tasting_with_Sommelier__c",
+      "label": "Did TVG Tasting with Sommelier",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Villa_Tour__c",
+      "label": "Villa Tour",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Attended_Happy_Hour__c",
+      "label": "Attended Happy Hour",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Assigned_Sales_Rep__c",
+      "label": "Assigned Sales Rep",
+      "type": "string",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Comments__c",
+      "label": "Comments",
+      "type": "textarea",
+      "length": 32768,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Status__c",
+      "label": "Status",
+      "type": "picklist",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": [
+        "Done",
+        "Pending"
+      ]
+    },
+    {
+      "name": "Future_Service__c",
+      "label": "Future Service",
+      "type": "multipicklist",
+      "length": 4099,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": [
+        "TVG Membership",
+        "TVOM Vineyards",
+        "TVOM Villas"
+      ]
+    },
+    {
+      "name": "Thank_You_Note__c",
+      "label": "Thank You Note",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Language__c",
+      "label": "Language",
+      "type": "picklist",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": [
+        "English",
+        "Spanish",
+        "Portuguese",
+        "Unknown"
+      ]
+    },
+    {
+      "name": "Email__c",
+      "label": "Email",
+      "type": "email",
+      "length": 80,
+      "required": false,
+      "externalId": true,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Account__c",
+      "label": "Account",
+      "type": "reference",
+      "length": 18,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Lead__c",
+      "label": "Lead",
+      "type": "reference",
+      "length": 18,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "PV__c",
+      "label": "PV",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Villa__c",
+      "label": "Villa",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Action__c",
+      "label": "Action",
+      "type": "string",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "State_Province__c",
+      "label": "State / Province",
+      "type": "string",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Country__c",
+      "label": "Country",
+      "type": "string",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Telephone__c",
+      "label": "Telephone",
+      "type": "phone",
+      "length": 40,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "City__c",
+      "label": "City",
+      "type": "string",
+      "length": 100,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Received_Information__c",
+      "label": "Received Information",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "X7F__c",
+      "label": "7F",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Form_source__c",
+      "label": "Form source",
+      "type": "picklist",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": [
+        "Brochure",
+        "Get in touch",
+        "Contact me form"
+      ]
+    },
+    {
+      "name": "Comply_Tasting_Date__c",
+      "label": "Comply Tasting Date",
+      "type": "date",
+      "length": 0,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Contact__c",
+      "label": "Contact",
+      "type": "reference",
+      "length": 18,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Preferred_Contact_Method__c",
+      "label": "Preferred Contact Method",
+      "type": "picklist",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": [
+        "Email",
+        "Phone",
+        "Text",
+        "Whatsapp"
+      ]
+    },
+    {
+      "name": "Preferred_Time_and_Day__c",
+      "label": "Preferred Time and Day",
+      "type": "string",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Brochure_Clicked__c",
+      "label": "Brochure Clicked",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Related_Opportunity__c",
+      "label": "Related Opportunity",
+      "type": "reference",
+      "length": 18,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Replied_to_Mkt_campaign_2025__c",
+      "label": "Replied to Mkt campaign 2025",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Mail_type__c",
+      "label": "Mail type",
+      "type": "picklist",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": [
+        "Unknown guests",
+        "Digital Prospects",
+        "Owner",
+        "Follow-up",
+        "TVOM Villas",
+        "TVOM Vineyards",
+        "TVG Membership",
+        "Others",
+        "Guest_PV",
+        "7F Guest_PV",
+        "Villa Owners_PV",
+        "TVG Members_PV",
+        "Prospects_PV",
+        "Prospect_not_PV",
+        "PopUp",
+        "Rest_PV"
+      ]
+    },
+    {
+      "name": "In_Conversation__c",
+      "label": "In Conversation",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Not_interested__c",
+      "label": "Not interested",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Ready_for_pardot_email_list__c",
+      "label": "Ready for pardot email list",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "In_Conversation_PV__c",
+      "label": "In Conversation - PV",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Follow_up__c",
+      "label": "Follow up",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    },
+    {
+      "name": "Mail_Type_PV__c",
+      "label": "Mail Type - PV",
+      "type": "picklist",
+      "length": 255,
+      "required": false,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": [
+        "TVG-only",
+        "Not-PV",
+        "General",
+        "PV",
+        "Rest-of-base",
+        "Siete-Fuegos",
+        "Digital-Prospects_L-DB",
+        "Digital-Prospects_L-GT",
+        "Digital-Prospects_W-JWJ",
+        "Digital-Prospects_W-PU"
+      ]
+    },
+    {
+      "name": "Ready_for_PV_mail__c",
+      "label": "Ready for PV mail",
+      "type": "boolean",
+      "length": 0,
+      "required": true,
+      "externalId": false,
+      "unique": false,
+      "picklistValues": []
+    }
+  ]
+}
