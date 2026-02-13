@@ -18,6 +18,7 @@ const FileTracker = require('./src/file-tracker');
 const Notifier = require('./src/notifier');
 const { parseCSV, isCSV } = require('./src/parsers/csv-parser');
 const { parseXML, isXML } = require('./src/parsers/xml-parser');
+const { parseOPERAFiles, findMatchingInvoiceFile } = require('./src/parsers/opera-parser');
 
 // Configuration
 const CONFIG = {
@@ -31,9 +32,10 @@ const CONFIG = {
     instanceUrl: process.env.SF_INSTANCE_URL,
     clientId: process.env.SF_CLIENT_ID,
     clientSecret: process.env.SF_CLIENT_SECRET,
-    refreshToken: process.env.SF_REFRESH_TOKEN
-  },
-  externalIdField: process.env.SF_EXTERNAL_ID_FIELD || 'OPERA_Reservation_ID__c'
+    refreshToken: process.env.SF_REFRESH_TOKEN,
+    objectType: process.env.SF_OBJECT || 'TVRS_Guest__c',
+    externalIdField: process.env.SF_EXTERNAL_ID_FIELD || 'Email__c'
+  }
 };
 
 // Global state
@@ -207,6 +209,12 @@ async function handleFileAdded(filePath) {
     return;
   }
 
+  // Skip invoices files (they're processed together with customers files)
+  if (filename.match(/invoices\d{8}\.csv$/i)) {
+    logger.debug(`Skipping invoices file (processed with customers file): ${filename}`);
+    return;
+  }
+
   // Check file format
   if (CONFIG.fileFormat !== 'auto') {
     const isExpectedFormat =
@@ -256,8 +264,23 @@ async function processFile(filePath) {
   try {
     // Parse file based on format
     let records;
-    if (isCSV(filePath)) {
-      logger.info('Detected CSV format');
+
+    // Check if this is an OPERA customers file
+    if (filename.match(/customers\d{8}\.csv$/i)) {
+      logger.info('Detected OPERA customers CSV format');
+
+      // Find matching invoices file
+      const invoicesFile = findMatchingInvoiceFile(filePath);
+      if (invoicesFile) {
+        logger.info(`Found matching invoices file: ${path.basename(invoicesFile)}`);
+      } else {
+        logger.warn('No matching invoices file found - proceeding without check-in/out dates');
+      }
+
+      // Parse and join OPERA files
+      records = await parseOPERAFiles(filePath, invoicesFile);
+    } else if (isCSV(filePath)) {
+      logger.info('Detected generic CSV format');
       records = await parseCSV(filePath);
     } else if (isXML(filePath)) {
       logger.info('Detected XML format');
@@ -277,8 +300,8 @@ async function processFile(filePath) {
     // Sync to Salesforce
     const results = await sfClient.syncRecords(
       records,
-      'Account', // TODO: Make object type configurable
-      CONFIG.externalIdField
+      CONFIG.salesforce.objectType,
+      CONFIG.salesforce.externalIdField
     );
 
     // Check results
