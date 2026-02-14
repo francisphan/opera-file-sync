@@ -1,0 +1,10 @@
+Transaction #,Numero,DATE,CUSTOMER_ID OPERA,CUSTOMER,Internal ID - Opera Trnx,ITEM,QUANTITY,RATE,Tax code,VAT_AMOUNT,Exchange Rate,Transaction type,Doc Letter,Punto de Venta,Department (Main Line),Location (Main Line),CAE,CAE Due date,Guest Name,Check in,Check out
+1001,F-0001,12-02-2026,4100001,Sarah Thompson,OP-90001,Room Charge,3,450.00,IVA 21,283.50,1,Invoice,A,0001,Rooms,Resort,,, Sarah Thompson,10-02-2026,13-02-2026
+1002,F-0001,12-02-2026,4100001,Sarah Thompson,OP-90001,Minibar,1,35.00,IVA 21,7.35,1,Invoice,A,0001,F&B,Resort,,, Sarah Thompson,10-02-2026,13-02-2026
+1003,F-0002,13-02-2026,4100003,Laura Chen,OP-90002,Room Charge,5,520.00,IVA 21,546.00,1,Invoice,A,0001,Rooms,Resort,,, Laura Chen,08-02-2026,13-02-2026
+1004,F-0002,13-02-2026,4100003,Laura Chen,OP-90002,Spa Treatment,2,180.00,IVA 21,75.60,1,Invoice,A,0001,Spa,Resort,,, Laura Chen,08-02-2026,13-02-2026
+1005,F-0003,14-02-2026,4100004,Michael Reed,OP-90003,Room Charge,4,480.00,IVA 21,403.20,1,Invoice,A,0001,Rooms,Resort,,, Michael Reed,10-02-2026,14-02-2026
+1006,F-0004,15-02-2026,4100006,Robert Larsen,OP-90004,Room Charge,7,450.00,IVA 21,661.50,1,Invoice,A,0001,Rooms,Resort,,, Robert Larsen,08-02-2026,15-02-2026
+1007,F-0004,15-02-2026,4100006,Robert Larsen,OP-90004,Wine Tasting,2,95.00,IVA 21,39.90,1,Invoice,A,0001,F&B,Resort,,, Robert Larsen,08-02-2026,15-02-2026
+1008,F-0004,15-02-2026,4100006,Robert Larsen,OP-90004,Vineyard Tour,1,120.00,IVA 21,25.20,1,Invoice,A,0001,Activities,Resort,,, Robert Larsen,08-02-2026,15-02-2026
+1009,F-0005,16-02-2026,4100008,Karen Park,OP-90005,Room Charge,3,520.00,IVA 21,327.60,1,Invoice,A,0001,Rooms,Resort,,, Karen Park,13-02-2026,16-02-2026

@@ -1,0 +1,16 @@
+Opera Internal ID,Tax Type (Tipo de contribuyente),Tax ID,Passport,Company Name,First Name,Last Name,BILLING_ADDRESS,Billing City,Billing State,Billing Country,Billing Zip,Phone,Email Address
+4100001,T,50000004267,1234567, ,Sarah,Thompson,TBC,TBC, ,GB, , ,sarah.thompson@example.com
+4100002,T,51600004992,1234567, ,David,Mitchell,TBC,TBC, ,AU, , ,david.mitchell@example.com
+4100003,B,50000002124,1234567, ,Laura,Chen,123 Example St,Anytown,CA,US,90000, ,laura.chen@example.com
+500001,B, ,12345678, ,.,CONSUMIDOR FINAL,.,., ,AR, , ,
+500001,B, ,12345678, ,.,CONSUMIDOR FINAL,.,., ,AR, , ,
+4100004,B,50000004267,149257151, ,Michael,Reed,Flat 1, 10 Sample Road,London, ,GB,AA1 1AA, ,michael.reed@example.com
+4100005,B,50000004267,151851324, ,Emma,Clarke,The Lodge, Green Lane,Sometown, ,GB, , ,emma.clarke@example.com
+2600001,A,30700000000,30700000000,EJEMPLO TOURS SOCIEDAD ANONIMA, ,Ejemplo Tours,Av Example 1000 P1,Capital Federal, Ciudad de Buenos Aires, ,AR, , ,
+2600001,A,30700000000,30700000000,EJEMPLO TOURS SOCIEDAD ANONIMA, ,Ejemplo Tours,Av Example 1000 P1,Capital Federal, Ciudad de Buenos Aires, ,AR, , ,
+10001,A,30700000001,30700000001,MUESTRA SRL, ,Muestra Expediciones,Calle Ejemplo 100,Buenos Aires,BUE,AR,C1000AAA, ,info@example.com.ar
+10001,A,30700000001,30700000001,MUESTRA SRL, ,Muestra Expediciones,Calle Ejemplo 100,Buenos Aires,BUE,AR,C1000AAA, ,info@example.com.ar
+4100006,B,50000002124,565650414, ,Robert,Larsen,456 Test Drive,Anyville, ,US, , ,robert.larsen@example.com
+4100007,B, ,568692321, ,Nicole,Hoffmann,789 Demo Ave,Sampletown,CO,US,80000, ,nicole.hoffmann@example.com
+4100008,B,50000002124,666680435, ,Karen,Park,321 Placeholder Blvd,Testville,CA,US,90000, ,karen.park@example.com
+3100001,B, ,A02449298, ,Thomas,Murray,55 Fake Way,Exampleport, ,US, , ,thomas.murray@example.com

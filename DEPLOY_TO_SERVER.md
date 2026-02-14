@@ -25,7 +25,8 @@ D:\opera-sync\
 ├── .env
 ├── test-server-requirements.ps1   # Server testing script (optional)
 └── samples\                        # Test files (optional)
-    ├── sample-export.csv
+    ├── sample-customers.csv
+    ├── sample-invoices.csv
     └── sample-export.xml
 ```
 

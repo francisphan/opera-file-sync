@@ -1,6 +1,0 @@
-ReservationID,FirstName,LastName,Email,Phone,CheckInDate,CheckOutDate,City,State,Country,Language
-123456,John,Smith,john.smith@example.com,555-1234,2024-02-10,2024-02-12,Los Angeles,CA,USA,English
-123457,Jane,Doe,jane.doe@example.com,555-5678,2024-02-11,2024-02-13,New York,NY,USA,English
-123458,Bob,Johnson,bob.johnson@example.com,555-9012,2024-02-12,2024-02-15,Toronto,ON,Canada,English
-123459,Maria,Garcia,maria.garcia@example.com,555-3456,2024-02-13,2024-02-16,Mexico City,CDMX,Mexico,Spanish
-123460,Pierre,Dubois,pierre.dubois@example.com,555-7890,2024-02-14,2024-02-17,Paris,IDF,France,French
