@@ -127,24 +127,11 @@ class Notifier {
     }
 
     try {
-      let transporter = this.transporter;
-
-      // For Gmail OAuth, get a fresh access token and create transporter
       if (this.useGmailAPI) {
-        const accessToken = await this._getGmailAccessToken();
-        transporter = nodemailer.createTransport({
-          host: 'smtp.gmail.com',
-          port: 465,
-          secure: true,
-          auth: {
-            type: 'OAuth2',
-            user: this.gmailUser,
-            accessToken: accessToken
-          }
-        });
+        return await this._sendViaGmailREST(subject, textBody, htmlBody);
       }
 
-      const info = await transporter.sendMail({
+      const info = await this.transporter.sendMail({
         from: this.emailFrom,
         to: this.emailTo,
         subject: subject,
@@ -161,18 +148,46 @@ class Notifier {
   }
 
   /**
-   * Get Gmail access token using refresh token via HTTP (works in pkg bundles)
+   * Send email via Gmail REST API (bypasses SMTP entirely, works in pkg bundles)
    */
-  async _getGmailAccessToken() {
-    const res = await axios.post('https://oauth2.googleapis.com/token', {
+  async _sendViaGmailREST(subject, textBody, htmlBody) {
+    // Get access token
+    const tokenRes = await axios.post('https://oauth2.googleapis.com/token', {
       client_id: this.gmailClientId,
       client_secret: this.gmailClientSecret,
       refresh_token: this.gmailRefreshToken,
       grant_type: 'refresh_token'
     });
-
+    const accessToken = tokenRes.data.access_token;
     logger.debug('Gmail access token obtained');
-    return res.data.access_token;
+
+    // Build MIME message
+    const message = [
+      `From: ${this.emailFrom}`,
+      `To: ${this.emailTo}`,
+      `Subject: ${subject}`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      htmlBody || textBody
+    ].join('\r\n');
+
+    // Base64url encode
+    const encoded = Buffer.from(message)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    // Send via Gmail API
+    const res = await axios.post(
+      'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
+      { raw: encoded },
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+
+    logger.debug(`Email sent via Gmail API: ${res.data.id}`);
+    return true;
   }
 
   /**
