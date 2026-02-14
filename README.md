@@ -21,6 +21,8 @@ Salesforce TVRS_Guest__c
 3. Records are joined on Opera Internal ID, transformed, and upserted to Salesforce
 4. Processed files move to `processed/`, failures move to `failed/` with email alerts
 
+**Note:** On first startup, the watcher processes all existing files in the export directory. On subsequent runs, files already recorded in `processed-files.json` are skipped (matched by filename).
+
 ## Fields Synced
 
 | OPERA Export Column | Salesforce Field |
@@ -126,8 +128,6 @@ D:\opera-sync\
 └── .env
 ```
 
-See `dist/deploy/DEPLOY.txt` for full deployment instructions.
-
 ### Run as Windows Service (Optional)
 
 Use [NSSM](https://nssm.cc/) to run as a background service that starts automatically:
@@ -162,8 +162,8 @@ opera-file-sync/
 │   ├── file-tracker.js             # Deduplication tracking
 │   └── parsers/
 │       ├── opera-parser.js         # OPERA CSV parser (customers + invoices join)
-│       ├── csv-parser.js           # Generic CSV parser
-│       └── xml-parser.js           # XML parser
+│       ├── csv-parser.js           # Generic CSV parser (fallback)
+│       └── xml-parser.js           # XML parser (fallback)
 ├── get-refresh-token.js            # Salesforce OAuth token generator
 ├── get-gmail-oauth-token.js        # Gmail OAuth token generator
 ├── get-sf-schema.js                # Salesforce schema discovery tool
@@ -171,9 +171,6 @@ opera-file-sync/
 ├── test-notifications.js           # Test email alerts
 ├── test-opera-parser.js            # Test OPERA CSV parsing
 ├── test-single-record.js           # Test single record upsert
-├── dist/deploy/
-│   ├── .env.example                # Server deployment config template
-│   └── DEPLOY.txt                  # Server deployment instructions
 └── tvrs-guest-schema.json          # TVRS_Guest__c field schema (discovered via API)
 ```
 

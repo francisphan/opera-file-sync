@@ -171,7 +171,7 @@ TcpTestSucceeded : True
 
 ```powershell
 # Check if directory exists and you can access it
-$exportDir = "C:\OPERA\Exports\Reservations"
+$exportDir = "D:\MICROS\opera\export\OPERA\vines"
 
 # Test read
 Test-Path $exportDir
@@ -195,8 +195,8 @@ New-Item -ItemType Directory -Path $exportDir -Force
 ```powershell
 # Create and test directories
 $dirs = @(
-    "C:\OPERA\Exports\Processed",
-    "C:\OPERA\Exports\Failed"
+    "D:\MICROS\opera\export\OPERA\vines\processed",
+    "D:\MICROS\opera\export\OPERA\vines\failed"
 )
 
 foreach ($dir in $dirs) {

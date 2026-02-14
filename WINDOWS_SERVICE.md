@@ -11,26 +11,26 @@ NSSM (Non-Sucking Service Manager) is the easiest way to create Windows services
 ### Step 1: Download NSSM
 
 1. Download from: https://nssm.cc/download
-2. Extract `nssm.exe` to a folder (e.g., `C:\OPERA\Sync\`)
+2. Extract `nssm.exe` to a folder (e.g., `D:\opera-sync\`)
 
 ### Step 2: Install Service
 
 ```powershell
 # Run as Administrator
-cd C:\OPERA\Sync
+cd D:\opera-sync
 
 # For standalone executable:
-.\nssm.exe install OperaSalesforceSync "C:\OPERA\Sync\opera-sync.exe"
+.\nssm.exe install OperaSalesforceSync "D:\opera-sync\opera-sync.exe"
 
 # Or for Node.js version:
-.\nssm.exe install OperaSalesforceSync "C:\Program Files\nodejs\node.exe" "C:\OPERA\Sync\opera-file-sync.js"
+.\nssm.exe install OperaSalesforceSync "C:\Program Files\nodejs\node.exe" "D:\opera-sync\opera-file-sync.js"
 ```
 
 ### Step 3: Configure Service
 
 ```powershell
 # Set working directory
-.\nssm.exe set OperaSalesforceSync AppDirectory "C:\OPERA\Sync"
+.\nssm.exe set OperaSalesforceSync AppDirectory "D:\opera-sync"
 
 # Set startup type to automatic
 .\nssm.exe set OperaSalesforceSync Start SERVICE_AUTO_START
@@ -42,8 +42,8 @@ cd C:\OPERA\Sync
 .\nssm.exe set OperaSalesforceSync Description "Syncs OPERA file exports to Salesforce"
 
 # Redirect logs (optional)
-.\nssm.exe set OperaSalesforceSync AppStdout "C:\OPERA\Sync\logs\service-output.log"
-.\nssm.exe set OperaSalesforceSync AppStderr "C:\OPERA\Sync\logs\service-error.log"
+.\nssm.exe set OperaSalesforceSync AppStdout "D:\opera-sync\logs\service-output.log"
+.\nssm.exe set OperaSalesforceSync AppStderr "D:\opera-sync\logs\service-error.log"
 
 # Auto-restart on failure
 .\nssm.exe set OperaSalesforceSync AppExit Default Restart
@@ -106,8 +106,8 @@ Alternative if you can't install NSSM.
 4. **Actions Tab:**
    - Click **New**
    - Action: **Start a program**
-   - Program/script: `C:\OPERA\Sync\opera-sync.exe`
-   - Start in: `C:\OPERA\Sync`
+   - Program/script: `D:\opera-sync\opera-sync.exe`
+   - Start in: `D:\opera-sync`
 
 5. **Conditions Tab:**
    - Uncheck: **Start only if computer is on AC power**
@@ -138,7 +138,7 @@ Built-in Windows tool, but more complex.
 ```powershell
 # Run as Administrator
 sc create OperaSalesforceSync `
-  binPath= "C:\OPERA\Sync\opera-sync.exe" `
+  binPath= "D:\opera-sync\opera-sync.exe" `
   DisplayName= "OPERA to Salesforce Sync" `
   start= auto `
   obj= "NT AUTHORITY\LocalSystem"
@@ -188,18 +188,18 @@ sc query OperaSalesforceSync
 
 ```powershell
 # View application logs
-type C:\OPERA\Sync\logs\opera-sync.log
+type D:\opera-sync\logs\opera-sync.log
 
 # View last 50 lines
-Get-Content C:\OPERA\Sync\logs\opera-sync.log -Tail 50
+Get-Content D:\opera-sync\logs\opera-sync.log -Tail 50
 
 # Monitor in real-time
-Get-Content C:\OPERA\Sync\logs\opera-sync.log -Wait -Tail 20
+Get-Content D:\opera-sync\logs\opera-sync.log -Wait -Tail 20
 ```
 
 ### Test Processing
 
-1. Copy a test file to `C:\OPERA\Exports\Reservations\`
+1. Copy a test file to `D:\MICROS\opera\export\OPERA\vines\`
 2. Watch the logs
 3. Verify file is processed
 4. Check Salesforce for new records
@@ -226,7 +226,7 @@ eventvwr.msc
    - Check file permissions
 
 2. **Incorrect working directory**
-   - Service must run from `C:\OPERA\Sync`
+   - Service must run from `D:\opera-sync`
    - Set with NSSM: `nssm set OperaSalesforceSync AppDirectory`
 
 3. **Permission issues**
@@ -241,7 +241,7 @@ eventvwr.msc
 
 **Check logs:**
 ```powershell
-type C:\OPERA\Sync\logs\opera-sync-errors.log
+type D:\opera-sync\logs\opera-sync-errors.log
 ```
 
 **Common causes:**
@@ -261,7 +261,7 @@ type C:\OPERA\Sync\logs\opera-sync-errors.log
 **Check file watcher:**
 ```powershell
 # Logs should show:
-# "Starting file watcher on: C:\OPERA\Exports\Reservations"
+# "Starting file watcher on: D:\MICROS\opera\export\OPERA\vines"
 # "File watcher ready"
 ```
 
@@ -285,7 +285,7 @@ Write-Host "Service status: $($status.Status)"
 if ($status.Status -eq "Running") {
     Write-Host "✓ Service started successfully" -ForegroundColor Green
     Write-Host "`nMonitoring logs..."
-    Get-Content "C:\OPERA\Sync\logs\opera-sync.log" -Wait -Tail 20
+    Get-Content "D:\opera-sync\logs\opera-sync.log" -Wait -Tail 20
 } else {
     Write-Host "✗ Service failed to start" -ForegroundColor Red
     Write-Host "`nCheck Event Viewer for errors:"
@@ -326,10 +326,10 @@ if ($service) {
     Write-Host "Start Type: $($service.StartType)"
 
     Write-Host "`n--- Recent Log Entries ---"
-    Get-Content "C:\OPERA\Sync\logs\opera-sync.log" -Tail 10
+    Get-Content "D:\opera-sync\logs\opera-sync.log" -Tail 10
 
     Write-Host "`n--- Statistics ---"
-    $processed = Get-Content "C:\OPERA\Sync\processed-files.json" -Raw | ConvertFrom-Json
+    $processed = Get-Content "D:\opera-sync\processed-files.json" -Raw | ConvertFrom-Json
     Write-Host "Total files processed: $($processed.PSObject.Properties.Count)"
 } else {
     Write-Host "Service not found: $serviceName" -ForegroundColor Red
@@ -398,12 +398,12 @@ sc delete OperaSalesforceSync
 
 ```powershell
 # 1. Copy files to server
-copy opera-sync.exe C:\OPERA\Sync\
-copy .env C:\OPERA\Sync\
+copy opera-sync.exe D:\opera-sync\
+copy .env D:\opera-sync\
 
 # 2. Install service
-nssm.exe install OperaSalesforceSync "C:\OPERA\Sync\opera-sync.exe"
-nssm.exe set OperaSalesforceSync AppDirectory "C:\OPERA\Sync"
+nssm.exe install OperaSalesforceSync "D:\opera-sync\opera-sync.exe"
+nssm.exe set OperaSalesforceSync AppDirectory "D:\opera-sync"
 nssm.exe set OperaSalesforceSync Start SERVICE_AUTO_START
 
 # 3. Start service
@@ -411,7 +411,7 @@ nssm.exe start OperaSalesforceSync
 
 # 4. Verify
 Get-Service OperaSalesforceSync
-Get-Content C:\OPERA\Sync\logs\opera-sync.log -Tail 20
+Get-Content D:\opera-sync\logs\opera-sync.log -Tail 20
 ```
 
 The service will now:

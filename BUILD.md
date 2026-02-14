@@ -152,18 +152,19 @@ Regardless of which option you choose, you need to create a `.env` file on the s
 
 ```bash
 # .env
-SF_INSTANCE_URL=https://your-instance.salesforce.com
+SF_INSTANCE_URL=https://your-instance.my.salesforce.com
 SF_CLIENT_ID=3MVG9...
 SF_CLIENT_SECRET=1234567890ABCDEF...
 SF_REFRESH_TOKEN=5Aep861...
+SF_OBJECT=TVRS_Guest__c
+SF_EXTERNAL_ID_FIELD=Email__c
 
-EXPORT_DIR=C:\OPERA\Exports\Reservations
-PROCESSED_DIR=C:\OPERA\Exports\Processed
-FAILED_DIR=C:\OPERA\Exports\Failed
+EXPORT_DIR=D:\MICROS\opera\export\OPERA\vines
+PROCESSED_DIR=D:\MICROS\opera\export\OPERA\vines\processed
+FAILED_DIR=D:\MICROS\opera\export\OPERA\vines\failed
 
 FILE_FORMAT=auto
 SYNC_MODE=upsert
-SF_EXTERNAL_ID_FIELD=OPERA_Reservation_ID__c
 LOG_LEVEL=info
 BATCH_SIZE=200
 ```
@@ -213,7 +214,7 @@ copy dist\opera-sync.exe \\opera-server\c$\OPERA\Sync\
 
 **Option B: Copy via RDP**
 1. Remote Desktop to OPERA server
-2. Copy `opera-sync.exe` to desired location (e.g., `C:\OPERA\Sync\`)
+2. Copy `opera-sync.exe` to desired location (e.g., `D:\opera-sync\`)
 
 **Option C: Copy via SFTP/SCP**
 ```bash
@@ -224,7 +225,7 @@ scp dist/opera-sync.exe user@opera-server:/path/to/sync/
 
 ```powershell
 # On OPERA server:
-cd C:\OPERA\Sync
+cd D:\opera-sync
 notepad .env
 # Paste configuration and save
 ```
@@ -232,9 +233,9 @@ notepad .env
 ### Step 4: Create Directories
 
 ```powershell
-mkdir C:\OPERA\Exports\Reservations
-mkdir C:\OPERA\Exports\Processed
-mkdir C:\OPERA\Exports\Failed
+mkdir D:\MICROS\opera\export\OPERA\vines
+mkdir D:\MICROS\opera\export\OPERA\vines\processed
+mkdir D:\MICROS\opera\export\OPERA\vines\failed
 ```
 
 ### Step 5: Test Run

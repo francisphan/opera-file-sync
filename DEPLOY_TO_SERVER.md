@@ -10,7 +10,7 @@ Step-by-step guide to copy files to the OPERA server and get the sync script run
 
 **Minimum files needed:**
 ```
-C:\OPERA\Sync\
+D:\opera-sync\
 ├── opera-sync.exe          # The executable (build with: npm run build:exe)
 └── .env                    # Configuration file (create on server)
 ```
@@ -20,7 +20,7 @@ C:\OPERA\Sync\
 ### Optional Files
 
 ```
-C:\OPERA\Sync\
+D:\opera-sync\
 ├── opera-sync.exe
 ├── .env
 ├── test-server-requirements.ps1   # Server testing script (optional)
@@ -123,7 +123,7 @@ dir \\OPERA-SERVER\C$\
 **Option A: Clipboard Copy/Paste**
 1. On your local machine: Copy `opera-sync.exe`
 2. RDP to OPERA server
-3. Navigate to `C:\OPERA\Sync\`
+3. Navigate to `D:\opera-sync\`
 4. Right-click → Paste
 
 **Option B: Shared Drive**
@@ -132,7 +132,7 @@ dir \\OPERA-SERVER\C$\
 3. Go to **This PC**
 4. You'll see your local drives listed (e.g., "C on LOCAL-PC")
 5. Navigate to your local `dist` folder
-6. Copy `opera-sync.exe` to `C:\OPERA\Sync\`
+6. Copy `opera-sync.exe` to `D:\opera-sync\`
 
 ---
 
@@ -158,10 +158,10 @@ $cred = Get-Credential
 $session = New-PSSession -ComputerName OPERA-SERVER -Credential $cred
 
 # Copy executable
-Copy-Item -Path "dist\opera-sync.exe" -Destination "C:\OPERA\Sync\" -ToSession $session
+Copy-Item -Path "dist\opera-sync.exe" -Destination "D:\opera-sync\" -ToSession $session
 
 # Copy test script (optional)
-Copy-Item -Path "test-server-requirements.ps1" -Destination "C:\OPERA\Sync\" -ToSession $session
+Copy-Item -Path "test-server-requirements.ps1" -Destination "D:\opera-sync\" -ToSession $session
 
 # Close session
 Remove-PSSession $session
@@ -172,7 +172,7 @@ Remove-PSSession $session
 ```powershell
 # Copy in one command
 $session = New-PSSession -ComputerName OPERA-SERVER -Credential (Get-Credential)
-Copy-Item -Path "dist\opera-sync.exe" -Destination "C:\OPERA\Sync\" -ToSession $session
+Copy-Item -Path "dist\opera-sync.exe" -Destination "D:\opera-sync\" -ToSession $session
 Remove-PSSession $session
 ```
 
@@ -187,7 +187,7 @@ If SFTP/SCP server is running on OPERA server:
 1. Download WinSCP: https://winscp.net
 2. Open WinSCP
 3. Connect to OPERA server (SFTP protocol)
-4. Navigate to `C:\OPERA\Sync\`
+4. Navigate to `D:\opera-sync\`
 5. Drag and drop `opera-sync.exe`
 
 ### Using SCP Command (Linux/macOS/WSL)
@@ -263,7 +263,7 @@ cp dist/opera-sync.exe /media/username/USB_NAME/
 1. Insert USB drive into OPERA server
 2. Open File Explorer
 3. Navigate to USB drive
-4. Copy `opera-sync.exe` to `C:\OPERA\Sync\`
+4. Copy `opera-sync.exe` to `D:\opera-sync\`
 
 ---
 
@@ -275,13 +275,13 @@ For the test script (2 KB) - not recommended for the .exe (80 MB):
 
 1. Email `test-server-requirements.ps1` to yourself
 2. Log in to email on OPERA server
-3. Download attachment to `C:\OPERA\Sync\`
+3. Download attachment to `D:\opera-sync\`
 
 ### Via Cloud (OneDrive, Dropbox, Google Drive)
 
 1. Upload `opera-sync.exe` to cloud storage
 2. On OPERA server, download from cloud
-3. Move to `C:\OPERA\Sync\`
+3. Move to `D:\opera-sync\`
 
 ---
 
@@ -291,7 +291,7 @@ For the test script (2 KB) - not recommended for the .exe (80 MB):
 
 ```powershell
 # Navigate to directory
-cd C:\OPERA\Sync
+cd D:\opera-sync
 
 # Create .env file
 notepad .env
@@ -301,31 +301,35 @@ notepad .env
 
 ```bash
 # Salesforce OAuth Credentials
-SF_INSTANCE_URL=https://your-instance.salesforce.com
+SF_INSTANCE_URL=https://your-instance.my.salesforce.com
 SF_CLIENT_ID=your-client-id-here
 SF_CLIENT_SECRET=your-client-secret-here
 SF_REFRESH_TOKEN=your-refresh-token-here
 
+# Salesforce Object Configuration
+SF_OBJECT=TVRS_Guest__c
+SF_EXTERNAL_ID_FIELD=Email__c
+
 # OPERA Export Configuration
-EXPORT_DIR=C:\OPERA\Exports\Reservations
-PROCESSED_DIR=C:\OPERA\Exports\Processed
-FAILED_DIR=C:\OPERA\Exports\Failed
+EXPORT_DIR=D:\MICROS\opera\export\OPERA\vines
+PROCESSED_DIR=D:\MICROS\opera\export\OPERA\vines\processed
+FAILED_DIR=D:\MICROS\opera\export\OPERA\vines\failed
 
 # File Processing
 FILE_FORMAT=auto
 SYNC_MODE=upsert
-SF_EXTERNAL_ID_FIELD=OPERA_Reservation_ID__c
 BATCH_SIZE=200
 
 # Logging
 LOG_LEVEL=warn
 
-# Email Notifications (optional)
+# Email Notifications (Gmail OAuth2 - optional)
 EMAIL_ENABLED=false
-# SMTP_HOST=smtp.gmail.com
-# SMTP_PORT=587
 # SMTP_USER=your-email@gmail.com
-# SMTP_PASSWORD=your-app-password
+# GMAIL_CLIENT_ID=your-google-client-id
+# GMAIL_CLIENT_SECRET=your-google-client-secret
+# GMAIL_REFRESH_TOKEN=your-gmail-refresh-token
+# EMAIL_FROM=OPERA Sync <your-email@gmail.com>
 # EMAIL_TO=admin@yourcompany.com
 ```
 
@@ -339,11 +343,10 @@ EMAIL_ENABLED=false
 
 ```powershell
 # Create required directories
-New-Item -ItemType Directory -Path "C:\OPERA\Sync" -Force
-New-Item -ItemType Directory -Path "C:\OPERA\Exports\Reservations" -Force
-New-Item -ItemType Directory -Path "C:\OPERA\Exports\Processed" -Force
-New-Item -ItemType Directory -Path "C:\OPERA\Exports\Failed" -Force
-New-Item -ItemType Directory -Path "C:\OPERA\Sync\logs" -Force
+New-Item -ItemType Directory -Path "D:\opera-sync" -Force
+New-Item -ItemType Directory -Path "D:\opera-sync\logs" -Force
+New-Item -ItemType Directory -Path "D:\MICROS\opera\export\OPERA\vines\processed" -Force
+New-Item -ItemType Directory -Path "D:\MICROS\opera\export\OPERA\vines\failed" -Force
 ```
 
 ---
@@ -353,7 +356,7 @@ New-Item -ItemType Directory -Path "C:\OPERA\Sync\logs" -Force
 ### Test Server Requirements
 
 ```powershell
-cd C:\OPERA\Sync
+cd D:\opera-sync
 
 # Run server test (if you copied the test script)
 .\test-server-requirements.ps1
@@ -362,7 +365,7 @@ cd C:\OPERA\Sync
 ### Test the Executable
 
 ```powershell
-cd C:\OPERA\Sync
+cd D:\opera-sync
 
 # Test run (will watch for files)
 .\opera-sync.exe
@@ -376,8 +379,8 @@ OPERA File Export to Salesforce Sync - Starting
 Testing Salesforce connection...
 Connected to Salesforce as user@example.com
 Configuration:
-  Export Directory: C:\OPERA\Exports\Reservations
-  Processed Directory: C:\OPERA\Exports\Processed
+  Export Directory: D:\MICROS\opera\export\OPERA\vines
+  Processed Directory: D:\MICROS\opera\export\OPERA\vines\processed
   ...
 ======================================================================
 Initialization complete. Watching for files...
@@ -399,7 +402,7 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$ServerName,
 
-    [string]$DestPath = "C:\OPERA\Sync"
+    [string]$DestPath = "D:\opera-sync"
 )
 
 Write-Host "Deploying to $ServerName..." -ForegroundColor Cyan
@@ -524,7 +527,7 @@ Write-Host "  3. Test: cd $DestPath; .\opera-sync.exe"
 
 After copying files, verify:
 
-- [ ] `opera-sync.exe` is in `C:\OPERA\Sync\`
+- [ ] `opera-sync.exe` is in `D:\opera-sync\`
 - [ ] `.env` file exists and has correct credentials
 - [ ] Directories exist: `Reservations`, `Processed`, `Failed`
 - [ ] Can run `.\opera-sync.exe` without errors
@@ -533,7 +536,7 @@ After copying files, verify:
 **Verify file integrity:**
 ```powershell
 # Check file size (should be ~80 MB)
-Get-Item C:\OPERA\Sync\opera-sync.exe | Select Name, Length
+Get-Item D:\opera-sync\opera-sync.exe | Select Name, Length
 
 # Check if executable
 .\opera-sync.exe --version
@@ -547,7 +550,7 @@ Get-Item C:\OPERA\Sync\opera-sync.exe | Select Name, Length
 
 ```powershell
 # Restrict permissions to protect credentials
-icacls C:\OPERA\Sync\.env /inheritance:r /grant:r "%USERNAME%:F"
+icacls D:\opera-sync\.env /inheritance:r /grant:r "%USERNAME%:F"
 ```
 
 ---

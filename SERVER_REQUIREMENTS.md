@@ -64,11 +64,11 @@ Can also build for:
 ### File System Access
 
 **Read access:**
-- OPERA export directory (e.g., `C:\OPERA\Exports\Reservations\`)
+- OPERA export directory (e.g., `D:\MICROS\opera\export\OPERA\vines\`)
 
 **Write access:**
-- Processed files directory (e.g., `C:\OPERA\Exports\Processed\`)
-- Failed files directory (e.g., `C:\OPERA\Exports\Failed\`)
+- Processed files directory (e.g., `D:\MICROS\opera\export\OPERA\vines\processed\`)
+- Failed files directory (e.g., `D:\MICROS\opera\export\OPERA\vines\failed\`)
 - Logs directory (where .exe is located)
 
 ### Permissions
@@ -202,8 +202,8 @@ The script works with **standard OPERA exports** - no special modules needed:
 5. Output directory: Accessible to sync script
 
 **Export directory examples:**
-- Local: `C:\OPERA\Exports\Reservations\`
-- Network share: `\\opera-server\Exports\Reservations\`
+- Local: `D:\MICROS\opera\export\OPERA\vines\`
+- Network share: `\\opera-server\MICROS\opera\export\OPERA\vines\`
 - UNC path: `\\192.168.1.100\Exports\Reservations\`
 
 ---
@@ -232,7 +232,7 @@ The script works with **standard OPERA exports** - no special modules needed:
 
 **If using separate server:**
 - Mount OPERA export directory as network drive
-- Or use UNC path: `\\opera-server\Exports\`
+- Or use UNC path: `\\opera-server\MICROS\opera\export\OPERA\vines\`
 
 ---
 
@@ -273,7 +273,7 @@ The script works with **standard OPERA exports** - no special modules needed:
 **Usually no action needed**, but if blocked:
 ```powershell
 # Add exclusion (run as Administrator)
-Add-MpPreference -ExclusionPath "C:\OPERA\Sync\opera-sync.exe"
+Add-MpPreference -ExclusionPath "D:\opera-sync\opera-sync.exe"
 ```
 
 ### User Account Control (UAC)
