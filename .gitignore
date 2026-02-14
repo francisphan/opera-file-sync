@@ -29,3 +29,4 @@ Thumbs.db
 
 dist/deploy/opera-sync.exe
 dist/opera-sync.exe
+dist/nssm.exe
