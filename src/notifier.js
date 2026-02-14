@@ -1,7 +1,6 @@
 const nodemailer = require('nodemailer');
 const axios = require('axios');
 const logger = require('./logger');
-const { google } = require('googleapis');
 
 class Notifier {
   constructor() {
@@ -14,23 +13,24 @@ class Notifier {
       const useGmailOAuth = !!(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_REFRESH_TOKEN);
 
       if (useGmailOAuth) {
-        // Gmail OAuth2 configuration - use Gmail API instead of SMTP
-        logger.info('Gmail OAuth credentials detected - configuring Gmail API');
+        // Gmail OAuth2 configuration - use nodemailer with OAuth2 transport
+        logger.info('Gmail OAuth credentials detected - configuring nodemailer OAuth2');
         logger.debug(`Client ID: ${process.env.GMAIL_CLIENT_ID?.substring(0, 20)}...`);
         logger.debug(`Refresh Token: ${process.env.GMAIL_REFRESH_TOKEN?.substring(0, 20)}...`);
 
-        // Set up Gmail API client
         this.useGmailAPI = true;
-        this.oauth2Client = new google.auth.OAuth2(
-          process.env.GMAIL_CLIENT_ID,
-          process.env.GMAIL_CLIENT_SECRET,
-          'http://localhost:3000/oauth/callback'
-        );
-        this.oauth2Client.setCredentials({
-          refresh_token: process.env.GMAIL_REFRESH_TOKEN
+        this.transporter = nodemailer.createTransport({
+          service: 'gmail',
+          auth: {
+            type: 'OAuth2',
+            user: process.env.SMTP_USER,
+            clientId: process.env.GMAIL_CLIENT_ID,
+            clientSecret: process.env.GMAIL_CLIENT_SECRET,
+            refreshToken: process.env.GMAIL_REFRESH_TOKEN
+          }
         });
 
-        logger.info('Using Gmail API for email');
+        logger.info('Using Gmail OAuth2 via nodemailer');
       } else {
         // Standard SMTP configuration
         this.emailConfig = {
@@ -43,15 +43,11 @@ class Notifier {
           }
         };
         logger.info('Using SMTP for email');
+        this.transporter = nodemailer.createTransport(this.emailConfig);
       }
 
       this.emailFrom = process.env.EMAIL_FROM || process.env.SMTP_USER;
       this.emailTo = process.env.EMAIL_TO;
-
-      // Only create nodemailer transporter if not using Gmail API
-      if (!this.useGmailAPI) {
-        this.transporter = nodemailer.createTransport(this.emailConfig);
-      }
     }
 
     // Slack configuration
@@ -81,23 +77,25 @@ class Notifier {
     }
 
     try {
-      // Verify SMTP transport if using SMTP
-      if (!this.useGmailAPI && this.transporter) {
+      // Verify transport
+      if (this.transporter) {
         await this.transporter.verify();
-        logger.info('SMTP configuration is valid');
-      } else if (this.useGmailAPI) {
-        logger.info('Gmail API configured');
+        logger.info('Email transport verified');
       }
 
       // Send test email
-      await this.sendEmail(
+      const sent = await this.sendEmail(
         'OPERA Sync - Test Email',
         'This is a test email from the OPERA to Salesforce sync script.\n\nIf you received this, email notifications are working correctly!',
         '<h2>OPERA Sync - Test Email</h2><p>This is a test email from the OPERA to Salesforce sync script.</p><p><strong>If you received this, email notifications are working correctly!</strong></p>'
       );
 
-      logger.info('Test email sent successfully');
-      return true;
+      if (sent) {
+        logger.info('Test email sent successfully');
+      } else {
+        logger.warn('Test email failed to send');
+      }
+      return sent;
     } catch (err) {
       logger.error('Email test failed:', err);
       return false;
@@ -135,62 +133,20 @@ class Notifier {
     }
 
     try {
-      if (this.useGmailAPI) {
-        // Use Gmail API
-        return await this._sendViaGmailAPI(subject, textBody, htmlBody);
-      } else {
-        // Use SMTP
-        const info = await this.transporter.sendMail({
-          from: this.emailFrom,
-          to: this.emailTo,
-          subject: subject,
-          text: textBody,
-          html: htmlBody
-        });
+      const info = await this.transporter.sendMail({
+        from: this.emailFrom,
+        to: this.emailTo,
+        subject: subject,
+        text: textBody,
+        html: htmlBody
+      });
 
-        logger.debug(`Email sent: ${info.messageId}`);
-        return true;
-      }
+      logger.debug(`Email sent: ${info.messageId}`);
+      return true;
     } catch (err) {
       logger.error('Failed to send email:', err);
       return false;
     }
-  }
-
-  /**
-   * Send email via Gmail API (OAuth2)
-   */
-  async _sendViaGmailAPI(subject, textBody, htmlBody) {
-    const gmail = google.gmail({ version: 'v1', auth: this.oauth2Client });
-
-    // Create MIME message
-    const message = [
-      `From: ${this.emailFrom}`,
-      `To: ${this.emailTo}`,
-      `Subject: ${subject}`,
-      'MIME-Version: 1.0',
-      'Content-Type: text/html; charset=utf-8',
-      '',
-      htmlBody || textBody
-    ].join('\n');
-
-    // Encode message in base64url
-    const encodedMessage = Buffer.from(message)
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
-
-    // Send via Gmail API
-    const res = await gmail.users.messages.send({
-      userId: 'me',
-      requestBody: {
-        raw: encodedMessage
-      }
-    });
-
-    logger.debug(`Email sent via Gmail API: ${res.data.id}`);
-    return true;
   }
 
   /**
