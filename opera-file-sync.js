@@ -335,6 +335,9 @@ async function processFile(filePath) {
       logger.info(`✓ File processed successfully: ${results.success} records synced`);
       handleSuccessfulProcessing(filePath, results.success);
 
+      // Notify success via Slack
+      await notifier.notifyFileProcessed(filename, results.success, filtered ? filtered.length : 0);
+
       // Notify recovery if we had previous errors
       if (notifier.consecutiveErrors > 0) {
         await notifier.notifyRecovery(results.success);
