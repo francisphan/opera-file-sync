@@ -98,6 +98,41 @@ function convertDateFormat(dateStr) {
 }
 
 /**
+ * Agent/non-guest email detection keywords
+ */
+const AGENT_DOMAIN_KEYWORDS = [
+  'reserv', 'travel', 'tour', 'viaje', 'incoming', 'operacion',
+  'ventas', 'receptivo', 'mayorista', 'turismo', 'journey', 'experience',
+  'expedition', '.tur.', 'dmc', 'mice', 'smartflyer', 'fora.travel',
+  'traveledge', 'travelcorp', 'protravelinc', 'globaltravelcollection',
+  'cadencetravel', 'dreamvacations', 'tbhtravel', 'foundluxury',
+  'privateclients', 'hontravel', 'poptour', 'maintravel', 'kangaroo',
+  'primetour', 'booking.com', 'expedia', 'aspirelifestyles',
+  'centurioncard', 'vendor@'
+];
+
+/**
+ * Check if a customer record looks like a travel agent or non-guest
+ * @param {Object} customer - Customer data from parseCustomers
+ * @returns {string|null} Category string if agent, null if guest
+ */
+function isAgentEmail(customer) {
+  const email = (customer.email || '').toLowerCase();
+  const firstName = (customer.firstName || '').trim();
+
+  if (email.indexOf('guest.booking.com') !== -1) return 'booking-proxy';
+  if (email.indexOf('expediapartnercentral.com') !== -1) return 'expedia-proxy';
+
+  if (firstName === '' || firstName === '.' || firstName === 'TBC') return 'company';
+
+  for (const keyword of AGENT_DOMAIN_KEYWORDS) {
+    if (email.indexOf(keyword.toLowerCase()) !== -1) return 'agent-domain';
+  }
+
+  return null;
+}
+
+/**
  * Transform joined data to TVRS_Guest__c format
  * @param {Object} customer - Customer data
  * @param {Object} invoice - Invoice data (optional)
@@ -174,12 +209,26 @@ async function parseOPERAFiles(customersFile, invoicesFile = null) {
     logger.warn(`Invoices file not found: ${invoicesFile}`);
   }
 
-  // Join customers with invoices and transform
+  // Join customers with invoices and transform, filtering out agent emails
   const records = [];
+  const filtered = [];
   for (const [operaId, customer] of customers) {
     // Skip records without email (required for upsert)
     if (!customer.email || !customer.email.includes('@')) {
       logger.debug(`Skipping customer ${operaId} - no valid email`);
+      continue;
+    }
+
+    // Check if this looks like a travel agent / non-guest
+    const agentCategory = isAgentEmail(customer);
+    if (agentCategory) {
+      filtered.push({
+        email: customer.email,
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+        operaId: customer.operaId,
+        category: agentCategory
+      });
       continue;
     }
 
@@ -188,8 +237,11 @@ async function parseOPERAFiles(customersFile, invoicesFile = null) {
     records.push(record);
   }
 
-  logger.info(`Transformed ${records.length} records for Salesforce`);
-  return records;
+  if (filtered.length > 0) {
+    logger.info(`Filtered ${filtered.length} agent/company emails`);
+  }
+  logger.info(`Transformed ${records.length} guest records for Salesforce`);
+  return { records, filtered };
 }
 
 /**
@@ -254,6 +306,7 @@ module.exports = {
   parseOPERAFiles,
   findMatchingInvoiceFile,
   findMatchingCustomersFile,
+  isAgentEmail,
   parseCustomers,
   parseInvoices,
   transformToTVRSGuest,

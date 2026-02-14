@@ -258,6 +258,7 @@ async function processFile(filePath) {
   try {
     // Parse file based on format
     let records;
+    let filtered;
 
     // Check if this is an OPERA customers file
     if (filename.match(/customers\d{8}\.csv$/i)) {
@@ -272,7 +273,9 @@ async function processFile(filePath) {
       }
 
       // Parse and join OPERA files
-      records = await parseOPERAFiles(filePath, invoicesFile);
+      const result = await parseOPERAFiles(filePath, invoicesFile);
+      records = result.records;
+      filtered = result.filtered;
     } else if (filename.match(/invoices\d{8}\.csv$/i)) {
       logger.info('Detected OPERA invoices CSV format');
 
@@ -286,7 +289,9 @@ async function processFile(filePath) {
       logger.info(`Found matching customers file: ${path.basename(customersFile)}`);
 
       // Parse and join OPERA files, then upsert (idempotent - updates existing records with dates)
-      records = await parseOPERAFiles(customersFile, filePath);
+      const result = await parseOPERAFiles(customersFile, filePath);
+      records = result.records;
+      filtered = result.filtered;
     } else if (isCSV(filePath)) {
       logger.info('Detected generic CSV format');
       records = await parseCSV(filePath);
@@ -295,6 +300,11 @@ async function processFile(filePath) {
       records = await parseXML(filePath);
     } else {
       throw new Error(`Unsupported file format: ${filename}`);
+    }
+
+    // Send notification for filtered agent emails
+    if (filtered && filtered.length > 0) {
+      await notifier.notifyFilteredAgents(filename, filtered);
     }
 
     if (!records || records.length === 0) {

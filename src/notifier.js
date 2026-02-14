@@ -234,6 +234,73 @@ class Notifier {
   }
 
   /**
+   * Notify about filtered agent/non-guest emails
+   */
+  async notifyFilteredAgents(filename, filteredRecords) {
+    if (!this.emailEnabled || filteredRecords.length === 0) {
+      return;
+    }
+
+    const count = filteredRecords.length;
+    const subject = `OPERA Sync - Filtered Agent Emails (${count})`;
+
+    const tableRows = filteredRecords.map(r => {
+      return `<tr>
+        <td style="padding: 6px; border: 1px solid #ddd;">${r.email}</td>
+        <td style="padding: 6px; border: 1px solid #ddd;">${r.firstName}</td>
+        <td style="padding: 6px; border: 1px solid #ddd;">${r.lastName}</td>
+        <td style="padding: 6px; border: 1px solid #ddd;">${r.operaId}</td>
+        <td style="padding: 6px; border: 1px solid #ddd;">${r.category}</td>
+      </tr>`;
+    }).join('\n');
+
+    const textLines = filteredRecords.map(r =>
+      `  ${r.email} | ${r.firstName} ${r.lastName} | ${r.operaId} | ${r.category}`
+    ).join('\n');
+
+    const textBody = `
+OPERA Sync - Filtered Agent Emails
+===================================
+
+File: ${filename}
+Filtered: ${count} records
+Time: ${new Date().toISOString()}
+
+These records were excluded from the Salesforce sync because they
+appear to be travel agents, OTA proxies, or company entries.
+
+${textLines}
+
+If any of these are real guests, they can be manually added to Salesforce.
+    `.trim();
+
+    const htmlBody = `
+      <h2>OPERA Sync - Filtered Agent Emails</h2>
+      <p><strong>File:</strong> ${filename}<br>
+      <strong>Filtered:</strong> ${count} records<br>
+      <strong>Time:</strong> ${new Date().toISOString()}</p>
+
+      <p>These records were excluded from the Salesforce sync because they
+      appear to be travel agents, OTA proxies, or company entries.
+      If any are real guests, they can be manually added.</p>
+
+      <table style="border-collapse: collapse; margin: 20px 0; font-size: 13px;">
+        <tr style="background: #f5f5f5;">
+          <th style="padding: 6px; border: 1px solid #ddd; text-align: left;">Email</th>
+          <th style="padding: 6px; border: 1px solid #ddd; text-align: left;">First Name</th>
+          <th style="padding: 6px; border: 1px solid #ddd; text-align: left;">Last Name</th>
+          <th style="padding: 6px; border: 1px solid #ddd; text-align: left;">Opera ID</th>
+          <th style="padding: 6px; border: 1px solid #ddd; text-align: left;">Category</th>
+        </tr>
+        ${tableRows}
+      </table>
+    `;
+
+    await this.sendEmail(subject, textBody, htmlBody);
+    logger.info(`Filtered agents notification sent for ${count} records`);
+  }
+
+  /**
    * Notify about file processing error
    */
   async notifyFileError(filename, error, details = {}) {
