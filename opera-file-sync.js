@@ -109,7 +109,7 @@ async function initialize() {
   logger.info(`  Processed Directory: ${CONFIG.processedDir}`);
   logger.info(`  Failed Directory: ${CONFIG.failedDir}`);
   logger.info(`  File Format: ${CONFIG.fileFormat}`);
-  logger.info(`  External ID Field: ${CONFIG.externalIdField}`);
+  logger.info(`  External ID Field: ${CONFIG.salesforce.externalIdField}`);
   logger.info(`  Sync Mode: ${process.env.SYNC_MODE || 'upsert'}`);
 
   const stats = fileTracker.getStats();
