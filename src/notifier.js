@@ -13,24 +13,16 @@ class Notifier {
       const useGmailOAuth = !!(process.env.GMAIL_CLIENT_ID && process.env.GMAIL_REFRESH_TOKEN);
 
       if (useGmailOAuth) {
-        // Gmail OAuth2 configuration - use nodemailer with OAuth2 transport
-        logger.info('Gmail OAuth credentials detected - configuring nodemailer OAuth2');
+        // Gmail OAuth2 configuration
+        logger.info('Gmail OAuth credentials detected - configuring Gmail OAuth2');
         logger.debug(`Client ID: ${process.env.GMAIL_CLIENT_ID?.substring(0, 20)}...`);
         logger.debug(`Refresh Token: ${process.env.GMAIL_REFRESH_TOKEN?.substring(0, 20)}...`);
 
         this.useGmailAPI = true;
-        this.transporter = nodemailer.createTransport({
-          host: 'smtp.gmail.com',
-          port: 465,
-          secure: true,
-          auth: {
-            type: 'OAuth2',
-            user: process.env.SMTP_USER,
-            clientId: process.env.GMAIL_CLIENT_ID,
-            clientSecret: process.env.GMAIL_CLIENT_SECRET,
-            refreshToken: process.env.GMAIL_REFRESH_TOKEN
-          }
-        });
+        this.gmailUser = process.env.SMTP_USER;
+        this.gmailClientId = process.env.GMAIL_CLIENT_ID;
+        this.gmailClientSecret = process.env.GMAIL_CLIENT_SECRET;
+        this.gmailRefreshToken = process.env.GMAIL_REFRESH_TOKEN;
 
         logger.info('Using Gmail OAuth2 via nodemailer');
       } else {
@@ -79,10 +71,10 @@ class Notifier {
     }
 
     try {
-      // Verify transport
-      if (this.transporter) {
+      // Verify transport (skip for Gmail OAuth - verified on first send)
+      if (!this.useGmailAPI && this.transporter) {
         await this.transporter.verify();
-        logger.info('Email transport verified');
+        logger.info('SMTP transport verified');
       }
 
       // Send test email
@@ -135,7 +127,24 @@ class Notifier {
     }
 
     try {
-      const info = await this.transporter.sendMail({
+      let transporter = this.transporter;
+
+      // For Gmail OAuth, get a fresh access token and create transporter
+      if (this.useGmailAPI) {
+        const accessToken = await this._getGmailAccessToken();
+        transporter = nodemailer.createTransport({
+          host: 'smtp.gmail.com',
+          port: 465,
+          secure: true,
+          auth: {
+            type: 'OAuth2',
+            user: this.gmailUser,
+            accessToken: accessToken
+          }
+        });
+      }
+
+      const info = await transporter.sendMail({
         from: this.emailFrom,
         to: this.emailTo,
         subject: subject,
@@ -149,6 +158,21 @@ class Notifier {
       logger.error('Failed to send email:', err);
       return false;
     }
+  }
+
+  /**
+   * Get Gmail access token using refresh token via HTTP (works in pkg bundles)
+   */
+  async _getGmailAccessToken() {
+    const res = await axios.post('https://oauth2.googleapis.com/token', {
+      client_id: this.gmailClientId,
+      client_secret: this.gmailClientSecret,
+      refresh_token: this.gmailRefreshToken,
+      grant_type: 'refresh_token'
+    });
+
+    logger.debug('Gmail access token obtained');
+    return res.data.access_token;
   }
 
   /**
