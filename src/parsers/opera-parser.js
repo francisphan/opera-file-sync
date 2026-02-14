@@ -215,9 +215,45 @@ function findMatchingInvoiceFile(customersFile) {
   return null;
 }
 
+/**
+ * Find matching customers file for an invoices file
+ * Checks the same directory first, then the processed directory
+ * @param {string} invoicesFile - Path to invoices CSV
+ * @param {string} processedDir - Path to processed directory
+ * @returns {string|null} Path to matching customers file or null
+ */
+function findMatchingCustomersFile(invoicesFile, processedDir) {
+  const dir = path.dirname(invoicesFile);
+  const basename = path.basename(invoicesFile);
+
+  // Extract date from invoices file (e.g., invoices20260212.csv -> 20260212)
+  const match = basename.match(/invoices(\d{8})\.csv$/i);
+  if (!match) return null;
+
+  const date = match[1];
+  const customersFilename = `customers${date}.csv`;
+
+  // Check export directory first
+  const inExportDir = path.join(dir, customersFilename);
+  if (fs.existsSync(inExportDir)) {
+    return inExportDir;
+  }
+
+  // Check processed directory
+  if (processedDir) {
+    const inProcessedDir = path.join(processedDir, customersFilename);
+    if (fs.existsSync(inProcessedDir)) {
+      return inProcessedDir;
+    }
+  }
+
+  return null;
+}
+
 module.exports = {
   parseOPERAFiles,
   findMatchingInvoiceFile,
+  findMatchingCustomersFile,
   parseCustomers,
   parseInvoices,
   transformToTVRSGuest,

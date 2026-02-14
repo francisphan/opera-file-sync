@@ -18,7 +18,7 @@ const FileTracker = require('./src/file-tracker');
 const Notifier = require('./src/notifier');
 const { parseCSV, isCSV } = require('./src/parsers/csv-parser');
 const { parseXML, isXML } = require('./src/parsers/xml-parser');
-const { parseOPERAFiles, findMatchingInvoiceFile } = require('./src/parsers/opera-parser');
+const { parseOPERAFiles, findMatchingInvoiceFile, findMatchingCustomersFile } = require('./src/parsers/opera-parser');
 
 // Configuration
 const CONFIG = {
@@ -209,12 +209,6 @@ async function handleFileAdded(filePath) {
     return;
   }
 
-  // Skip invoices files (they're processed together with customers files)
-  if (filename.match(/invoices\d{8}\.csv$/i)) {
-    logger.debug(`Skipping invoices file (processed with customers file): ${filename}`);
-    return;
-  }
-
   // Check file format
   if (CONFIG.fileFormat !== 'auto') {
     const isExpectedFormat =
@@ -279,6 +273,20 @@ async function processFile(filePath) {
 
       // Parse and join OPERA files
       records = await parseOPERAFiles(filePath, invoicesFile);
+    } else if (filename.match(/invoices\d{8}\.csv$/i)) {
+      logger.info('Detected OPERA invoices CSV format');
+
+      // Find matching customers file (export dir first, then processed dir)
+      const customersFile = findMatchingCustomersFile(filePath, CONFIG.processedDir);
+      if (!customersFile) {
+        logger.warn('No matching customers file found - cannot sync without customer emails, skipping');
+        return;
+      }
+
+      logger.info(`Found matching customers file: ${path.basename(customersFile)}`);
+
+      // Parse and join OPERA files, then upsert (idempotent - updates existing records with dates)
+      records = await parseOPERAFiles(customersFile, filePath);
     } else if (isCSV(filePath)) {
       logger.info('Detected generic CSV format');
       records = await parseCSV(filePath);
