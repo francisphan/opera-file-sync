@@ -171,7 +171,7 @@ function startWatcher() {
   const watcher = chokidar.watch(CONFIG.exportDir, {
     ignored: /(^|[\/\\])\../, // ignore dotfiles
     persistent: true,
-    ignoreInitial: false,
+    ignoreInitial: true,
     depth: 0, // only watch top level
     awaitWriteFinish: {
       stabilityThreshold: CONFIG.fileProcessingDelay,
