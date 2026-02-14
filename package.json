@@ -40,7 +40,7 @@
     "fast-xml-parser": "^4.3.5",
     "googleapis": "^171.4.0",
     "jsforce": "^3.10.14",
-    "nodemailer": "^6.9.8",
+    "nodemailer": "^8.0.1",
     "open": "^8.4.0",
     "winston": "^3.11.0"
   },
