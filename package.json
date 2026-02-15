@@ -8,11 +8,14 @@
   },
   "scripts": {
     "start": "node opera-file-sync.js",
+    "start:db": "node opera-db-sync.js",
     "test": "node test-connection.js",
+    "test:oracle": "node test-oracle-connection.js",
     "test:notifications": "node test-notifications.js",
     "build:bundle": "ncc build opera-file-sync.js -o dist",
-    "build:exe": "pkg . --targets node18-win-x64 --output dist/opera-sync.exe",
-    "build:all": "npm run build:bundle && npm run build:exe",
+    "build:exe": "pkg opera-file-sync.js --targets node18-win-x64 --output dist/opera-sync-file.exe",
+    "build:exe:db": "pkg opera-db-sync.js --targets node18-win-x64 --output dist/opera-sync-db.exe",
+    "build:all": "npm run build:exe && npm run build:exe:db",
     "build:linux": "pkg . --targets node18-linux-x64 --output dist/opera-sync-linux",
     "build:macos": "pkg . --targets node18-macos-x64 --output dist/opera-sync-macos"
   },
@@ -38,7 +41,9 @@
     "dotenv": "^16.4.5",
     "fast-xml-parser": "^4.3.5",
     "jsforce": "^3.10.14",
+    "node-schedule": "^2.1.1",
     "nodemailer": "^8.0.1",
+    "oracledb": "^6.10.0",
     "winston": "^3.11.0"
   },
   "devDependencies": {
