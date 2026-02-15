@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const csvParser = require('csv-parser');
 const logger = require('../logger');
+const { isAgentEmail, AGENT_DOMAIN_KEYWORDS, transformToTVRSGuest } = require('../guest-utils');
 
 /**
  * Parse customers CSV file
@@ -98,91 +99,14 @@ function convertDateFormat(dateStr) {
 }
 
 /**
- * Agent/non-guest email detection keywords
+ * CSV-specific wrapper: converts DD-MM-YYYY dates before passing to transformToTVRSGuest
  */
-const AGENT_DOMAIN_KEYWORDS = [
-  'reserv', 'travel', 'tour', 'viaje', 'incoming', 'operacion',
-  'ventas', 'receptivo', 'mayorista', 'turismo', 'journey', 'experience',
-  'expedition', '.tur.', 'dmc', 'mice', 'smartflyer', 'fora.travel',
-  'traveledge', 'travelcorp', 'protravelinc', 'globaltravelcollection',
-  'cadencetravel', 'dreamvacations', 'tbhtravel', 'foundluxury',
-  'privateclients', 'hontravel', 'poptour', 'maintravel', 'kangaroo',
-  'primetour', 'booking.com', 'expedia', 'aspirelifestyles',
-  'centurioncard', 'vendor@'
-];
-
-/**
- * Check if a customer record looks like a travel agent or non-guest
- * @param {Object} customer - Customer data from parseCustomers
- * @returns {string|null} Category string if agent, null if guest
- */
-function isAgentEmail(customer) {
-  const email = (customer.email || '').toLowerCase();
-  const firstName = (customer.firstName || '').trim();
-
-  if (email.indexOf('guest.booking.com') !== -1) return 'booking-proxy';
-  if (email.indexOf('expediapartnercentral.com') !== -1) return 'expedia-proxy';
-
-  if (firstName === '' || firstName === '.' || firstName === 'TBC') return 'company';
-
-  for (const keyword of AGENT_DOMAIN_KEYWORDS) {
-    if (email.indexOf(keyword.toLowerCase()) !== -1) return 'agent-domain';
-  }
-
-  return null;
-}
-
-/**
- * Transform joined data to TVRS_Guest__c format
- * @param {Object} customer - Customer data
- * @param {Object} invoice - Invoice data (optional)
- * @returns {Object} Salesforce record
- */
-function transformToTVRSGuest(customer, invoice) {
-  const record = {
-    // External ID (required for upsert)
-    Email__c: customer.email,
-
-    // Guest information
-    Guest_First_Name__c: customer.firstName,
-    Guest_Last_Name__c: customer.lastName,
-
-    // Address information
-    City__c: customer.billingCity,
-    State_Province__c: customer.billingState,
-    Country__c: customer.billingCountry,
-
-    // Required boolean fields (all default to false)
-    Future_Sales_Prospect__c: false,
-    TVG__c: false,
-    Greeted_at_Check_In__c: false,
-    Received_PV_Explanation__c: false,
-    Vineyard_Tour__c: false,
-    Did_TVG_Tasting_With_Sales_Rep__c: false,
-    Did_TVG_Tasting_with_Sommelier__c: false,
-    Villa_Tour__c: false,
-    Attended_Happy_Hour__c: false,
-    Brochure_Clicked__c: false,
-    Replied_to_Mkt_campaign_2025__c: false,
-    In_Conversation__c: false,
-    Not_interested__c: false,
-    Ready_for_pardot_email_list__c: false,
-    In_Conversation_PV__c: false,
-    Follow_up__c: false,
-    Ready_for_PV_mail__c: false
-  };
-
-  // Add check-in/out dates if available from invoice
-  if (invoice) {
-    if (invoice.checkIn) {
-      record.Check_In_Date__c = convertDateFormat(invoice.checkIn);
-    }
-    if (invoice.checkOut) {
-      record.Check_Out_Date__c = convertDateFormat(invoice.checkOut);
-    }
-  }
-
-  return record;
+function transformToTVRSGuestCSV(customer, invoice) {
+  const convertedInvoice = invoice ? {
+    checkIn: convertDateFormat(invoice.checkIn),
+    checkOut: convertDateFormat(invoice.checkOut)
+  } : null;
+  return transformToTVRSGuest(customer, convertedInvoice);
 }
 
 /**
@@ -233,7 +157,7 @@ async function parseOPERAFiles(customersFile, invoicesFile = null) {
     }
 
     const invoice = invoices.get(operaId);
-    const record = transformToTVRSGuest(customer, invoice);
+    const record = transformToTVRSGuestCSV(customer, invoice);
     records.push(record);
   }
 
@@ -312,3 +236,6 @@ module.exports = {
   transformToTVRSGuest,
   convertDateFormat
 };
+
+// Re-export from guest-utils for backwards compatibility
+// isAgentEmail and transformToTVRSGuest are imported at the top
