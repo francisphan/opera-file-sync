@@ -2,6 +2,12 @@
 
 This guide shows how to run the OPERA sync script as a Windows Service so it starts automatically with the server.
 
+**Note:** This project now has two separate executables:
+- `opera-sync-file.exe` — File-based sync (CSV watching)
+- `opera-sync-db.exe` — Database-based sync (Oracle CQN)
+
+Choose one based on your sync mode. The setup process is the same for both.
+
 ---
 
 ## Option 1: Using NSSM (Recommended)
@@ -19,8 +25,11 @@ NSSM (Non-Sucking Service Manager) is the easiest way to create Windows services
 # Run as Administrator
 cd D:\opera-sync
 
-# For standalone executable:
-.\nssm.exe install OperaSalesforceSync "D:\opera-sync\opera-sync.exe"
+# For file-based sync (CSV watching):
+.\nssm.exe install OPERAFileSyncService "D:\opera-sync\opera-sync-file.exe"
+
+# Or for database-based sync (Oracle CQN):
+.\nssm.exe install OPERADBSyncService "D:\opera-sync\opera-sync-db.exe"
 
 # Or for Node.js version:
 .\nssm.exe install OperaSalesforceSync "C:\Program Files\nodejs\node.exe" "D:\opera-sync\opera-file-sync.js"
@@ -29,24 +38,29 @@ cd D:\opera-sync
 ### Step 3: Configure Service
 
 ```powershell
+# Replace SERVICE_NAME with either OPERAFileSyncService or OPERADBSyncService
+$SERVICE_NAME = "OPERAFileSyncService"  # or "OPERADBSyncService"
+
 # Set working directory
-.\nssm.exe set OperaSalesforceSync AppDirectory "D:\opera-sync"
+.\nssm.exe set $SERVICE_NAME AppDirectory "D:\opera-sync"
 
 # Set startup type to automatic
-.\nssm.exe set OperaSalesforceSync Start SERVICE_AUTO_START
+.\nssm.exe set $SERVICE_NAME Start SERVICE_AUTO_START
 
 # Set display name
-.\nssm.exe set OperaSalesforceSync DisplayName "OPERA to Salesforce Sync"
+.\nssm.exe set $SERVICE_NAME DisplayName "OPERA to Salesforce Sync (File Mode)"
+# Or for DB mode:
+# .\nssm.exe set $SERVICE_NAME DisplayName "OPERA to Salesforce Sync (DB Mode)"
 
 # Set description
-.\nssm.exe set OperaSalesforceSync Description "Syncs OPERA file exports to Salesforce"
+.\nssm.exe set $SERVICE_NAME Description "Syncs OPERA guest records to Salesforce TVRS_Guest__c"
 
 # Redirect logs (optional)
-.\nssm.exe set OperaSalesforceSync AppStdout "D:\opera-sync\logs\service-output.log"
-.\nssm.exe set OperaSalesforceSync AppStderr "D:\opera-sync\logs\service-error.log"
+.\nssm.exe set $SERVICE_NAME AppStdout "D:\opera-sync\logs\service-output.log"
+.\nssm.exe set $SERVICE_NAME AppStderr "D:\opera-sync\logs\service-error.log"
 
 # Auto-restart on failure
-.\nssm.exe set OperaSalesforceSync AppExit Default Restart
+.\nssm.exe set $SERVICE_NAME AppExit Default Restart
 ```
 
 ### Step 4: Start Service
@@ -394,28 +408,48 @@ sc delete OperaSalesforceSync
 
 ## Summary
 
-**Recommended setup (NSSM):**
+**Recommended setup (NSSM) — File-based sync:**
 
 ```powershell
 # 1. Copy files to server
-copy opera-sync.exe D:\opera-sync\
+copy opera-sync-file.exe D:\opera-sync\
 copy .env D:\opera-sync\
 
 # 2. Install service
-nssm.exe install OperaSalesforceSync "D:\opera-sync\opera-sync.exe"
-nssm.exe set OperaSalesforceSync AppDirectory "D:\opera-sync"
-nssm.exe set OperaSalesforceSync Start SERVICE_AUTO_START
+nssm.exe install OPERAFileSyncService "D:\opera-sync\opera-sync-file.exe"
+nssm.exe set OPERAFileSyncService AppDirectory "D:\opera-sync"
+nssm.exe set OPERAFileSyncService Start SERVICE_AUTO_START
 
 # 3. Start service
-nssm.exe start OperaSalesforceSync
+nssm.exe start OPERAFileSyncService
 
 # 4. Verify
-Get-Service OperaSalesforceSync
+Get-Service OPERAFileSyncService
 Get-Content D:\opera-sync\logs\opera-sync.log -Tail 20
+```
+
+**Recommended setup (NSSM) — Database-based sync:**
+
+```powershell
+# 1. Copy files to server
+copy opera-sync-db.exe D:\opera-sync\
+copy .env D:\opera-sync\  # (must include Oracle credentials)
+
+# 2. Install service
+nssm.exe install OPERADBSyncService "D:\opera-sync\opera-sync-db.exe"
+nssm.exe set OPERADBSyncService AppDirectory "D:\opera-sync"
+nssm.exe set OPERADBSyncService Start SERVICE_AUTO_START
+
+# 3. Start service
+nssm.exe start OPERADBSyncService
+
+# 4. Verify
+Get-Service OPERADBSyncService
+Get-Content D:\opera-sync\logs\opera-db-sync.log -Tail 20
 ```
 
 The service will now:
 - ✅ Start automatically on server boot
 - ✅ Restart automatically on failure
 - ✅ Run in the background
-- ✅ Process files continuously
+- ✅ Process guests continuously (file watching or real-time CQN)
