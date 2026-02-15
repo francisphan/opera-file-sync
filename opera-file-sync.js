@@ -16,6 +16,9 @@ const logger = require('./src/logger');
 const SalesforceClient = require('./src/salesforce-client');
 const FileTracker = require('./src/file-tracker');
 const Notifier = require('./src/notifier');
+const DailyStats = require('./src/daily-stats');
+const DuplicateDetector = require('./src/duplicate-detector');
+const { setupDailySummary } = require('./src/scheduler');
 const { parseCSV, isCSV } = require('./src/parsers/csv-parser');
 const { parseXML, isXML } = require('./src/parsers/xml-parser');
 const { parseOPERAFiles, findMatchingInvoiceFile, findMatchingCustomersFile } = require('./src/parsers/opera-parser');
@@ -42,6 +45,8 @@ const CONFIG = {
 let sfClient;
 let fileTracker;
 let notifier;
+let dailyStats;
+let duplicateDetector;
 let isProcessing = false;
 
 /**
@@ -71,8 +76,17 @@ async function initialize() {
   // Initialize notifier
   notifier = new Notifier();
 
+  // Initialize daily statistics
+  dailyStats = new DailyStats();
+
   // Initialize Salesforce client
   sfClient = new SalesforceClient(CONFIG.salesforce);
+
+  // Initialize duplicate detector
+  duplicateDetector = new DuplicateDetector(sfClient);
+
+  // Setup daily summary scheduler
+  setupDailySummary(notifier, dailyStats, fileTracker);
 
   // Test Salesforce connection
   logger.info('Testing Salesforce connection...');
@@ -305,6 +319,7 @@ async function processFile(filePath) {
     // Send notification for filtered agent emails
     if (filtered && filtered.length > 0) {
       await notifier.notifyFilteredAgents(filename, filtered);
+      dailyStats.addSkipped('agent', filtered.length);
     }
 
     if (!records || records.length === 0) {
@@ -315,9 +330,60 @@ async function processFile(filePath) {
 
     logger.info(`Extracted ${records.length} records from file`);
 
+    // Duplicate detection
+    const duplicates = [];
+    const recordsToSync = [];
+
+    for (const record of records) {
+      const customer = {
+        firstName: record.Guest_First_Name__c || '',
+        lastName: record.Guest_Last_Name__c || '',
+        email: record.Email__c || '',
+        billingCity: record.City__c || '',
+        billingState: record.State_Province__c || '',
+        billingCountry: record.Country__c || ''
+      };
+
+      const invoice = {
+        checkIn: record.Check_In_Date__c || '',
+        checkOut: record.Check_Out_Date__c || ''
+      };
+
+      const dupCheck = await duplicateDetector.checkForDuplicates(customer, invoice);
+
+      if (dupCheck.isDuplicate) {
+        duplicates.push({
+          email: customer.email,
+          firstName: customer.firstName,
+          lastName: customer.lastName,
+          probability: dupCheck.probability,
+          matches: dupCheck.matches,
+          category: 'duplicate-detected'
+        });
+        logger.debug(`Skipping duplicate: ${customer.firstName} ${customer.lastName} (${customer.email}) - ${dupCheck.probability}% probability`);
+      } else {
+        recordsToSync.push(record);
+      }
+    }
+
+    // Notify about duplicates if any were detected
+    if (duplicates.length > 0) {
+      logger.info(`Detected ${duplicates.length} potential duplicates (skipped)`);
+      await notifier.notifyDuplicatesDetected(filename, duplicates);
+      dailyStats.addSkipped('duplicate', duplicates.length);
+    }
+
+    if (recordsToSync.length === 0) {
+      logger.warn('All records were filtered or duplicates - nothing to sync');
+      handleSuccessfulProcessing(filePath, 0);
+      return;
+    }
+
+    logger.info(`Syncing ${recordsToSync.length} records to Salesforce (${duplicates.length} duplicates skipped)`);
+
     // Sync to Salesforce
     const results = await sfClient.syncRecords(
-      records,
+      recordsToSync,
       CONFIG.salesforce.objectType,
       CONFIG.salesforce.externalIdField
     );
@@ -335,6 +401,9 @@ async function processFile(filePath) {
       logger.info(`✓ File processed successfully: ${results.success} records synced`);
       handleSuccessfulProcessing(filePath, results.success);
 
+      // Track daily stats
+      dailyStats.addUpload(results.success);
+
       // Notify success via Slack
       await notifier.notifyFileProcessed(filename, results.success, filtered ? filtered.length : 0);
 
@@ -349,6 +418,9 @@ async function processFile(filePath) {
   } catch (err) {
     logger.error(`✗ File processing failed: ${err.message}`, err);
     handleFailedProcessing(filePath, err);
+
+    // Track daily stats
+    dailyStats.addError(err);
 
     // Send error notification
     await notifier.notifyFileError(filename, err, {
