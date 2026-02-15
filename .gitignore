@@ -31,5 +31,5 @@ Thumbs.db
 reports/
 
 dist/deploy/opera-sync.exe
-dist/opera-sync.exe
+dist/opera-*.exe
 dist/nssm.exe
