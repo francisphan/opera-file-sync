@@ -19,62 +19,63 @@ const AGENT_DOMAIN_KEYWORDS = [
 ];
 
 /**
- * Sanitize email addresses to fix common typos and encoding issues
+ * Validate email addresses - no auto-fixing, just validation
+ * Any issues are flagged for manual review in the daily report
  * @param {string} email - Raw email from Opera database
- * @returns {string|null} Cleaned email, or null if unfixable
+ * @returns {string|null} Email if valid, null if invalid (will be tracked in daily report)
  */
 function sanitizeEmail(email) {
   if (!email || typeof email !== 'string') return null;
 
-  // Trim whitespace
-  let cleaned = email.trim();
+  const cleaned = email.trim();
 
-  // Remove trailing punctuation (common typo in Opera)
-  cleaned = cleaned.replace(/[.,;]+$/, '');
-
-  // Fix common domain typos: ,br → .br, ,com → .com, etc.
-  cleaned = cleaned.replace(/,([a-z]{2,3})$/i, '.$1');
-
-  // Transliterate common international characters to ASCII
-  const transliterations = {
-    'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u',
-    'à': 'a', 'è': 'e', 'ì': 'i', 'ò': 'o', 'ù': 'u',
-    'ä': 'a', 'ë': 'e', 'ï': 'i', 'ö': 'o', 'ü': 'u',
-    'â': 'a', 'ê': 'e', 'î': 'i', 'ô': 'o', 'û': 'u',
-    'ã': 'a', 'õ': 'o', 'ñ': 'n', 'ç': 'c',
-    'Á': 'A', 'É': 'E', 'Í': 'I', 'Ó': 'O', 'Ú': 'U',
-    'À': 'A', 'È': 'E', 'Ì': 'I', 'Ò': 'O', 'Ù': 'U',
-    'Ä': 'A', 'Ë': 'E', 'Ï': 'I', 'Ö': 'O', 'Ü': 'U',
-    'Â': 'A', 'Ê': 'E', 'Î': 'I', 'Ô': 'O', 'Û': 'U',
-    'Ã': 'A', 'Õ': 'O', 'Ñ': 'N', 'Ç': 'C'
-  };
-
-  for (const [char, replacement] of Object.entries(transliterations)) {
-    cleaned = cleaned.split(char).join(replacement);
+  // Must be ASCII-only (Salesforce requirement)
+  if (!/^[\x00-\x7F]*$/.test(cleaned)) {
+    return null;
   }
 
-  // Basic validation: must have exactly one @ and a domain with at least one dot
+  // Must have exactly one @
   const parts = cleaned.split('@');
-  if (parts.length !== 2) return null; // No @ or multiple @
-  if (parts[0].length === 0) return null; // Empty local part
-  if (parts[1].length === 0) return null; // Empty domain
+  if (parts.length !== 2) return null;
 
+  const localPart = parts[0];
   const domain = parts[1];
 
-  // Domain must have at least one dot and valid TLD (2-6 chars after last dot)
+  // Local part must not be empty
+  if (localPart.length === 0) return null;
+
+  // Domain must have at least one dot
+  if (!domain.includes('.')) return null;
+
+  // Domain must not have double dots, trailing/leading dots, or other obvious issues
+  if (domain.includes('..') || domain.startsWith('.') || domain.endsWith('.')) {
+    return null;
+  }
+
+  // Domain must not end with comma or other punctuation (common typo)
+  if (/[,;.]$/.test(domain)) {
+    return null;
+  }
+
+  // Must have valid TLD (2-6 alphanumeric chars after final dot)
   const domainParts = domain.split('.');
-  if (domainParts.length < 2) return null; // No TLD
-
   const tld = domainParts[domainParts.length - 1];
-  if (tld.length < 2 || tld.length > 6) return null; // Invalid TLD length
-  if (!/^[a-z0-9]+$/i.test(tld)) return null; // TLD must be alphanumeric
+  if (tld.length < 2 || tld.length > 6 || !/^[a-z0-9]+$/i.test(tld)) {
+    return null;
+  }
 
-  // Check for double dots (unfixable without guessing)
-  if (cleaned.includes('..')) return null;
+  // Suspicious: known email providers with short TLDs (likely typos)
+  const secondLevel = domainParts[domainParts.length - 2];
+  const knownProviders = ['gmail', 'yahoo', 'hotmail', 'outlook', 'aol', 'icloud', 'mail'];
+  const suspiciousTLDs = ['co', 'me', 'tv', 'io', 'to'];
 
-  // Check for trailing dot in domain (incomplete)
-  if (domain.endsWith('.')) return null;
+  if (domainParts.length === 2 &&
+      knownProviders.includes(secondLevel?.toLowerCase()) &&
+      suspiciousTLDs.includes(tld.toLowerCase())) {
+    return null;
+  }
 
+  // Valid - return as-is (no modifications)
   return cleaned;
 }
 
