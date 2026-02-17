@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * OPERA Database to Salesforce Sync - CQN Event-Driven
+ * OPERA Database to Salesforce Sync - Polling Mode
  *
- * Uses Oracle Continuous Query Notification to detect new/updated guest
- * email records and sync them to Salesforce in real-time.
+ * Polls Oracle database at regular intervals to detect new/updated guest
+ * email records and syncs them to Salesforce.
  */
 
 require('dotenv').config();
-const oracledb = require('oracledb');
 
 const logger = require('./src/logger');
 const SalesforceClient = require('./src/salesforce-client');
@@ -17,7 +16,7 @@ const SyncState = require('./src/sync-state');
 const Notifier = require('./src/notifier');
 const DailyStats = require('./src/daily-stats');
 const { setupDailySummary } = require('./src/scheduler');
-const { queryGuestsByIds, queryGuestsSince } = require('./src/opera-db-query');
+const { queryGuestsSince } = require('./src/opera-db-query');
 
 // Configuration
 const CONFIG = {
@@ -34,10 +33,9 @@ const CONFIG = {
     clientId: process.env.SF_CLIENT_ID,
     clientSecret: process.env.SF_CLIENT_SECRET,
     refreshToken: process.env.SF_REFRESH_TOKEN,
-    objectType: process.env.SF_OBJECT || 'TVRS_Guest__c',
-    externalIdField: process.env.SF_EXTERNAL_ID_FIELD || 'Email__c'
+    objectType: process.env.SF_OBJECT || 'TVRS_Guest__c'
   },
-  debounceMs: parseInt(process.env.CQN_DEBOUNCE_MS) || 5000
+  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MINUTES || 5) * 60 * 1000
 };
 
 // Global state
@@ -46,17 +44,15 @@ let oracleClient;
 let syncState;
 let notifier;
 let dailyStats;
-let cqnConnection;
-let pendingNameIds = new Set();
-let debounceTimer = null;
-let isProcessing = false;
+let pollTimer = null;
+let isPolling = false;
 
 /**
  * Initialize the application
  */
 async function initialize() {
   logger.info('='.repeat(70));
-  logger.info('OPERA Database to Salesforce Sync (CQN) - Starting');
+  logger.info('OPERA Database to Salesforce Sync (Polling Mode) - Starting');
   logger.info('='.repeat(70));
 
   if (!validateConfig()) {
@@ -91,7 +87,7 @@ async function initialize() {
   logger.info('Configuration:');
   logger.info(`  Oracle: ${CONFIG.oracle.host}:${CONFIG.oracle.port} (SID: ${CONFIG.oracle.sid || 'N/A'}, Service: ${CONFIG.oracle.service || 'N/A'})`);
   logger.info(`  Salesforce Object: ${CONFIG.salesforce.objectType}`);
-  logger.info(`  CQN Debounce: ${CONFIG.debounceMs}ms`);
+  logger.info(`  Poll Interval: ${CONFIG.pollIntervalMs / 1000 / 60} minutes`);
 
   const stats = syncState.getStats();
   logger.info(`  Last sync: ${stats.lastSyncTimestamp || 'never'}`);
@@ -120,171 +116,79 @@ function validateConfig() {
 }
 
 /**
- * Register CQN subscription on OPERA.NAME_PHONE
+ * Poll for changes and sync
  */
-async function registerCQN() {
-  logger.info('Registering CQN subscription on OPERA.NAME_PHONE...');
-
-  // CQN requires a dedicated connection (not from pool)
-  const connectString = CONFIG.oracle.sid
-    ? `(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=${CONFIG.oracle.host})(PORT=${CONFIG.oracle.port}))(CONNECT_DATA=(SID=${CONFIG.oracle.sid})))`
-    : `${CONFIG.oracle.host}:${CONFIG.oracle.port}/${CONFIG.oracle.service}`;
-
-  cqnConnection = await oracledb.getConnection({
-    user: CONFIG.oracle.user,
-    password: CONFIG.oracle.password,
-    connectString,
-    events: true
-  });
-
-  const options = {
-    callback: onDatabaseChange,
-    sql: `SELECT NAME_ID, PHONE_NUMBER FROM OPERA.NAME_PHONE WHERE PHONE_ROLE = 'EMAIL'`,
-    qos: oracledb.SUBSCR_QOS_ROWIDS | oracledb.SUBSCR_QOS_BEST_EFFORT,
-    timeout: 0 // No timeout — persistent subscription
-  };
-
-  await cqnConnection.subscribe('guest-email-changes', options);
-  logger.info('CQN subscription registered successfully');
-}
-
-/**
- * CQN callback — fired when OPERA.NAME_PHONE rows change
- */
-function onDatabaseChange(message) {
-  logger.debug('CQN event received:', JSON.stringify(message.type));
-
-  if (!message.tables) return;
-
-  for (const table of message.tables) {
-    if (!table.rows) continue;
-
-    for (const row of table.rows) {
-      // row.rowid is available; we need to query NAME_ID from it
-      // Add rowid to pending set for batch processing
-      if (row.rowid) {
-        pendingNameIds.add(row.rowid);
-      }
-    }
+async function poll() {
+  if (isPolling) {
+    logger.debug('Previous poll still running, skipping this interval');
+    return;
   }
 
-  // Debounce: wait for more events before processing
-  if (debounceTimer) clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(processPendingChanges, CONFIG.debounceMs);
-}
-
-/**
- * Process accumulated CQN changes
- */
-async function processPendingChanges() {
-  if (isProcessing || pendingNameIds.size === 0) return;
-
-  isProcessing = true;
-  const rowids = [...pendingNameIds];
-  pendingNameIds.clear();
+  isPolling = true;
 
   try {
-    // Resolve ROWIDs to NAME_IDs
-    const binds = {};
-    const placeholders = rowids.map((rid, idx) => {
-      binds[`r${idx}`] = rid;
-      return `:r${idx}`;
-    });
+    const lastSync = syncState.getLastSyncTimestamp();
+    logger.debug(`Polling for changes since ${lastSync || 'beginning'}...`);
 
-    const rows = await oracleClient.query(
-      `SELECT DISTINCT NAME_ID FROM OPERA.NAME_PHONE WHERE ROWID IN (${placeholders.join(',')})`,
-      binds
-    );
+    const { records, filtered } = await queryGuestsSince(oracleClient, lastSync);
 
-    const nameIds = rows.map(r => r.NAME_ID);
-    if (nameIds.length === 0) {
-      logger.debug('No valid NAME_IDs from CQN event');
+    if (filtered.length > 0) {
+      await notifier.notifyFilteredAgents('db-poll', filtered);
+      dailyStats.addSkipped('agent', filtered.length);
+    }
+
+    if (records.length === 0) {
+      logger.debug('No new records found');
+      syncState.markSuccess(0);
       return;
     }
 
-    logger.info(`Processing CQN event: ${nameIds.length} guest(s) changed`);
-    await syncGuests(nameIds);
+    logger.info(`Found ${records.length} new/updated guest(s), syncing to Salesforce...`);
+
+    const results = await sfClient.syncGuestCheckIns(records);
+
+    if (results.failed > 0 && results.success === 0) {
+      const err = new Error(`All ${results.failed} records failed: ${results.errors[0]?.error}`);
+      syncState.markFailed(err);
+      dailyStats.addError(err);
+      throw err;
+    }
+
+    logger.info(`✓ Synced ${results.success} records (${results.failed} failed)`);
+    syncState.markSuccess(results.success);
+    dailyStats.addUpload(results.success);
+
+    await notifier.notifyFileProcessed('db-poll', results.success, filtered.length);
+
+    if (notifier.consecutiveErrors > 0) {
+      await notifier.notifyRecovery(results.success);
+    } else {
+      notifier.resetErrorCount();
+    }
 
   } catch (err) {
-    logger.error('Error processing CQN changes:', err.message);
-    if (err.stack) logger.error(err.stack);
+    logger.error('Error during poll:', err.message);
+    if (err.stack) logger.debug(err.stack);
     dailyStats.addError(err);
-    await notifier.notifyFileError('CQN event', err, { stack: err.stack });
+    await notifier.notifyFileError('db-poll', err, { stack: err.stack });
   } finally {
-    isProcessing = false;
+    isPolling = false;
   }
 }
 
 /**
- * Query guest data and sync to Salesforce
+ * Start the polling loop
  */
-async function syncGuests(nameIds) {
-  const { records, filtered } = await queryGuestsByIds(oracleClient, nameIds);
+function startPolling() {
+  logger.info('='.repeat(70));
+  logger.info(`Polling every ${CONFIG.pollIntervalMs / 1000 / 60} minutes for database changes...`);
+  logger.info('='.repeat(70));
 
-  if (filtered.length > 0) {
-    await notifier.notifyFilteredAgents('db-sync', filtered);
-    dailyStats.addSkipped('agent', filtered.length);
-  }
+  // Run first poll immediately
+  poll();
 
-  if (records.length === 0) {
-    logger.info('No guest records to sync after filtering');
-    syncState.markSuccess(0);
-    return;
-  }
-
-  const results = await sfClient.syncGuestCheckIns(records);
-
-  if (results.failed > 0 && results.success === 0) {
-    const err = new Error(`All ${results.failed} records failed: ${results.errors[0]?.error}`);
-    syncState.markFailed(err);
-    dailyStats.addError(err);
-    throw err;
-  }
-
-  logger.info(`Synced ${results.success} records to Salesforce (${results.failed} failed)`);
-  syncState.markSuccess(results.success);
-  dailyStats.addUpload(results.success);
-
-  await notifier.notifyFileProcessed('db-sync', results.success, filtered.length);
-
-  if (notifier.consecutiveErrors > 0) {
-    await notifier.notifyRecovery(results.success);
-  } else {
-    notifier.resetErrorCount();
-  }
-}
-
-/**
- * Run catch-up query for records modified since last sync
- */
-async function runCatchUp() {
-  const lastSync = syncState.getLastSyncTimestamp();
-  logger.info(lastSync
-    ? `Running catch-up query for changes since ${lastSync}...`
-    : 'Running initial sync (no previous sync state)...');
-
-  const { records, filtered } = await queryGuestsSince(oracleClient, lastSync);
-
-  if (filtered.length > 0) {
-    await notifier.notifyFilteredAgents('db-catchup', filtered);
-    dailyStats.addSkipped('agent', filtered.length);
-  }
-
-  if (records.length === 0) {
-    logger.info('No new records to sync');
-    syncState.markSuccess(0);
-    return;
-  }
-
-  logger.info(`Catch-up: syncing ${records.length} records to Salesforce...`);
-
-  const results = await sfClient.syncGuestCheckIns(records);
-
-  logger.info(`Catch-up complete: ${results.success} synced, ${results.failed} failed`);
-  syncState.markSuccess(results.success);
-  dailyStats.addUpload(results.success);
-
-  await notifier.notifyFileProcessed('db-catchup', results.success, filtered.length);
+  // Then poll on interval
+  pollTimer = setInterval(poll, CONFIG.pollIntervalMs);
 }
 
 /**
@@ -293,20 +197,17 @@ async function runCatchUp() {
 async function shutdown() {
   logger.info('\nShutting down...');
 
-  if (debounceTimer) clearTimeout(debounceTimer);
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
 
-  if (cqnConnection) {
-    try {
-      await cqnConnection.unsubscribe('guest-email-changes');
-      logger.info('CQN subscription removed');
-    } catch (err) {
-      logger.debug('Error unsubscribing CQN:', err.message);
-    }
-    try {
-      await cqnConnection.close();
-    } catch (err) {
-      logger.debug('Error closing CQN connection:', err.message);
-    }
+  // Wait for current poll to finish
+  let waitCount = 0;
+  while (isPolling && waitCount < 30) {
+    logger.debug('Waiting for current poll to finish...');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    waitCount++;
   }
 
   if (oracleClient) {
@@ -327,18 +228,25 @@ async function shutdown() {
 async function main() {
   try {
     await initialize();
-    await runCatchUp();
-    await registerCQN();
 
-    logger.info('='.repeat(70));
-    logger.info('Listening for database changes...');
-    logger.info('='.repeat(70));
+    // Run initial catch-up sync
+    logger.info('Running initial sync...');
+    await poll();
+
+    // Start polling loop
+    startPolling();
 
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
 
   } catch (err) {
-    logger.error('Fatal error during startup:', err.message);
+    logger.error('Fatal error during startup:', err);
+    logger.error('Error details:', {
+      message: err.message,
+      code: err.code,
+      errorNum: err.errorNum,
+      offset: err.offset
+    });
     if (err.stack) logger.error(err.stack);
     if (dailyStats) dailyStats.addError(err);
     process.exit(1);
@@ -349,4 +257,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { syncGuests, runCatchUp };
+module.exports = { poll };
