@@ -24,15 +24,16 @@ function formatDate(date) {
  * Query guest data for a list of NAME_IDs
  * @param {OracleClient} oracleClient - Connected Oracle client
  * @param {number[]} nameIds - Array of Opera NAME_IDs
- * @returns {Promise<{records: Array, filtered: Array}>}
+ * @returns {Promise<{records: Array, filtered: Array, invalid: Array}>}
  */
 async function queryGuestsByIds(oracleClient, nameIds) {
   if (!nameIds || nameIds.length === 0) {
-    return { records: [], filtered: [] };
+    return { records: [], filtered: [], invalid: [] };
   }
 
   const records = [];
   const filtered = [];
+  const invalid = [];
   const batchSize = 50;
 
   for (let i = 0; i < nameIds.length; i += batchSize) {
@@ -82,6 +83,13 @@ async function queryGuestsByIds(oracleClient, nameIds) {
 
       if (!cleanedEmail) {
         logger.debug(`Skipping NAME_ID ${row.NAME_ID} - invalid email: ${rawEmail}`);
+        invalid.push({
+          email: rawEmail,
+          firstName: (row.FIRST || '').trim(),
+          lastName: (row.LAST || '').trim(),
+          operaId: String(row.NAME_ID),
+          reason: 'invalid-email'
+        });
         continue;
       }
 
@@ -121,9 +129,12 @@ async function queryGuestsByIds(oracleClient, nameIds) {
   if (filtered.length > 0) {
     logger.info(`Filtered ${filtered.length} agent/company emails`);
   }
+  if (invalid.length > 0) {
+    logger.info(`Skipped ${invalid.length} guests with invalid emails`);
+  }
   logger.info(`Transformed ${records.length} guest records for Salesforce`);
 
-  return { records, filtered };
+  return { records, filtered, invalid };
 }
 
 /**

@@ -130,11 +130,15 @@ async function poll() {
     const lastSync = syncState.getLastSyncTimestamp();
     logger.debug(`Polling for changes since ${lastSync || 'beginning'}...`);
 
-    const { records, filtered } = await queryGuestsSince(oracleClient, lastSync);
+    const { records, filtered, invalid } = await queryGuestsSince(oracleClient, lastSync);
 
     if (filtered.length > 0) {
       await notifier.notifyFilteredAgents('db-poll', filtered);
       dailyStats.addSkipped('agent', filtered.length);
+    }
+
+    if (invalid.length > 0) {
+      dailyStats.addSkipped('invalid', invalid.length);
     }
 
     if (records.length === 0) {
