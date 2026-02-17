@@ -16,7 +16,6 @@ const OracleClient = require('./src/oracle-client');
 const SyncState = require('./src/sync-state');
 const Notifier = require('./src/notifier');
 const DailyStats = require('./src/daily-stats');
-const DuplicateDetector = require('./src/duplicate-detector');
 const { setupDailySummary } = require('./src/scheduler');
 const { queryGuestsByIds, queryGuestsSince } = require('./src/opera-db-query');
 
@@ -47,7 +46,6 @@ let oracleClient;
 let syncState;
 let notifier;
 let dailyStats;
-let duplicateDetector;
 let cqnConnection;
 let pendingNameIds = new Set();
 let debounceTimer = null;
@@ -75,9 +73,6 @@ async function initialize() {
 
   // Connect to Salesforce
   sfClient = new SalesforceClient(CONFIG.salesforce);
-
-  // Initialize duplicate detector
-  duplicateDetector = new DuplicateDetector(sfClient);
 
   // Setup daily summary scheduler (no fileTracker for DB mode)
   setupDailySummary(notifier, dailyStats, null);
@@ -237,58 +232,7 @@ async function syncGuests(nameIds) {
     return;
   }
 
-  // Duplicate detection
-  const duplicates = [];
-  const recordsToSync = [];
-
-  for (const record of records) {
-    const customer = {
-      firstName: record.Guest_First_Name__c || '',
-      lastName: record.Guest_Last_Name__c || '',
-      email: record.Email__c || '',
-      billingCity: record.City__c || '',
-      billingState: record.State_Province__c || '',
-      billingCountry: record.Country__c || ''
-    };
-
-    const invoice = {
-      checkIn: record.Check_In_Date__c || '',
-      checkOut: record.Check_Out_Date__c || ''
-    };
-
-    const dupCheck = await duplicateDetector.checkForDuplicates(customer, invoice);
-
-    if (dupCheck.isDuplicate) {
-      duplicates.push({
-        email: customer.email,
-        firstName: customer.firstName,
-        lastName: customer.lastName,
-        probability: dupCheck.probability,
-        matches: dupCheck.matches,
-        category: 'duplicate-detected'
-      });
-    } else {
-      recordsToSync.push(record);
-    }
-  }
-
-  if (duplicates.length > 0) {
-    logger.info(`Detected ${duplicates.length} potential duplicates (skipped)`);
-    await notifier.notifyDuplicatesDetected('db-sync', duplicates);
-    dailyStats.addSkipped('duplicate', duplicates.length);
-  }
-
-  if (recordsToSync.length === 0) {
-    logger.info('All records were filtered or duplicates - nothing to sync');
-    syncState.markSuccess(0);
-    return;
-  }
-
-  const results = await sfClient.syncRecords(
-    recordsToSync,
-    CONFIG.salesforce.objectType,
-    CONFIG.salesforce.externalIdField
-  );
+  const results = await sfClient.syncGuestCheckIns(records);
 
   if (results.failed > 0 && results.success === 0) {
     const err = new Error(`All ${results.failed} records failed: ${results.errors[0]?.error}`);
@@ -332,54 +276,9 @@ async function runCatchUp() {
     return;
   }
 
-  // Duplicate detection for catch-up records
-  const duplicates = [];
-  const recordsToSync = [];
+  logger.info(`Catch-up: syncing ${records.length} records to Salesforce...`);
 
-  for (const record of records) {
-    const customer = {
-      firstName: record.Guest_First_Name__c || '',
-      lastName: record.Guest_Last_Name__c || '',
-      email: record.Email__c || '',
-      billingCity: record.City__c || '',
-      billingState: record.State_Province__c || '',
-      billingCountry: record.Country__c || ''
-    };
-
-    const invoice = {
-      checkIn: record.Check_In_Date__c || '',
-      checkOut: record.Check_Out_Date__c || ''
-    };
-
-    const dupCheck = await duplicateDetector.checkForDuplicates(customer, invoice);
-
-    if (dupCheck.isDuplicate) {
-      duplicates.push({
-        email: customer.email,
-        firstName: customer.firstName,
-        lastName: customer.lastName,
-        probability: dupCheck.probability,
-        matches: dupCheck.matches,
-        category: 'duplicate-detected'
-      });
-    } else {
-      recordsToSync.push(record);
-    }
-  }
-
-  if (duplicates.length > 0) {
-    logger.info(`Catch-up: detected ${duplicates.length} potential duplicates (skipped)`);
-    await notifier.notifyDuplicatesDetected('db-catchup', duplicates);
-    dailyStats.addSkipped('duplicate', duplicates.length);
-  }
-
-  logger.info(`Catch-up: syncing ${recordsToSync.length} records to Salesforce...`);
-
-  const results = await sfClient.syncRecords(
-    recordsToSync,
-    CONFIG.salesforce.objectType,
-    CONFIG.salesforce.externalIdField
-  );
+  const results = await sfClient.syncGuestCheckIns(records);
 
   logger.info(`Catch-up complete: ${results.success} synced, ${results.failed} failed`);
   syncState.markSuccess(results.success);

@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const csvParser = require('csv-parser');
 const logger = require('../logger');
-const { isAgentEmail, AGENT_DOMAIN_KEYWORDS, transformToTVRSGuest } = require('../guest-utils');
+const { isAgentEmail, AGENT_DOMAIN_KEYWORDS } = require('../guest-utils');
 
 /**
  * Parse customers CSV file
@@ -99,14 +99,14 @@ function convertDateFormat(dateStr) {
 }
 
 /**
- * CSV-specific wrapper: converts DD-MM-YYYY dates before passing to transformToTVRSGuest
+ * CSV-specific wrapper: converts DD-MM-YYYY dates to YYYY-MM-DD
  */
-function transformToTVRSGuestCSV(customer, invoice) {
-  const convertedInvoice = invoice ? {
+function convertInvoiceDates(invoice) {
+  if (!invoice) return null;
+  return {
     checkIn: convertDateFormat(invoice.checkIn),
     checkOut: convertDateFormat(invoice.checkOut)
-  } : null;
-  return transformToTVRSGuest(customer, convertedInvoice);
+  };
 }
 
 /**
@@ -156,9 +156,8 @@ async function parseOPERAFiles(customersFile, invoicesFile = null) {
       continue;
     }
 
-    const invoice = invoices.get(operaId);
-    const record = transformToTVRSGuestCSV(customer, invoice);
-    records.push(record);
+    const invoice = convertInvoiceDates(invoices.get(operaId));
+    records.push({ customer, invoice });
   }
 
   if (filtered.length > 0) {
@@ -233,9 +232,5 @@ module.exports = {
   isAgentEmail,
   parseCustomers,
   parseInvoices,
-  transformToTVRSGuest,
   convertDateFormat
 };
-
-// Re-export from guest-utils for backwards compatibility
-// isAgentEmail and transformToTVRSGuest are imported at the top

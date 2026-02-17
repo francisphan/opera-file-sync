@@ -7,7 +7,7 @@
  */
 
 const logger = require('./logger');
-const { isAgentEmail, transformToTVRSGuest } = require('./guest-utils');
+const { isAgentEmail } = require('./guest-utils');
 
 /**
  * Format a JS Date as YYYY-MM-DD for Salesforce
@@ -110,7 +110,7 @@ async function queryGuestsByIds(oracleClient, nameIds) {
         checkOut: formatDate(row.CHECK_OUT)
       } : null;
 
-      records.push(transformToTVRSGuest(customer, invoice));
+      records.push({ customer, invoice });
     }
   }
 

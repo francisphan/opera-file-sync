@@ -1,5 +1,6 @@
 const jsforce = require('jsforce');
 const logger = require('./logger');
+const { transformToContact, transformToTVRSGuest } = require('./guest-utils');
 
 class SalesforceClient {
   constructor(config) {
@@ -145,6 +146,244 @@ class SalesforceClient {
       logger.error('Batch upsert failed:', err);
       throw err;
     }
+  }
+
+  /**
+   * Two-phase sync: upsert Contacts by email, then upsert TVRS_Guest__c by Contact+CheckInDate
+   * @param {Array} guestDataList - Array of {customer, invoice} objects (raw, not yet transformed)
+   * @returns {Object} Combined results {contacts: {created, updated, failed}, guests: {created, updated, failed}, errors: []}
+   */
+  async syncGuestCheckIns(guestDataList) {
+    await this.ensureConnected();
+
+    if (!guestDataList || guestDataList.length === 0) {
+      logger.warn('No guest data to sync');
+      return { contacts: { created: 0, updated: 0, failed: 0 }, guests: { created: 0, updated: 0, failed: 0 }, errors: [] };
+    }
+
+    const batchSize = parseInt(process.env.BATCH_SIZE) || 200;
+    const guestObject = process.env.SF_OBJECT || 'TVRS_Guest__c';
+    const contactLookup = process.env.SF_GUEST_CONTACT_LOOKUP || 'Contact__c';
+    const results = {
+      contacts: { created: 0, updated: 0, failed: 0 },
+      guests: { created: 0, updated: 0, failed: 0 },
+      errors: []
+    };
+
+    // --- Phase 1: Upsert Contacts ---
+    logger.info(`Phase 1: Upserting ${guestDataList.length} Contacts...`);
+
+    // Deduplicate by email (take latest entry per email)
+    const byEmail = new Map();
+    for (const entry of guestDataList) {
+      const email = (entry.customer.email || '').toLowerCase();
+      if (email) byEmail.set(email, entry);
+    }
+    const uniqueEmails = [...byEmail.keys()];
+
+    // Query existing Contacts by email
+    const emailToContactId = new Map();
+    for (let i = 0; i < uniqueEmails.length; i += batchSize) {
+      const emailBatch = uniqueEmails.slice(i, i + batchSize);
+      const escaped = emailBatch.map(e => `'${e.replace(/'/g, "\\'")}'`).join(',');
+      const query = `SELECT Id, Email FROM Contact WHERE Email IN (${escaped})`;
+
+      try {
+        const result = await this.connection.query(query);
+        for (const rec of result.records) {
+          emailToContactId.set(rec.Email.toLowerCase(), rec.Id);
+        }
+      } catch (err) {
+        logger.error('Error querying existing Contacts:', err.message);
+        results.errors.push({ phase: 'contact-query', error: err.message });
+      }
+    }
+
+    logger.info(`Found ${emailToContactId.size} existing Contacts out of ${uniqueEmails.length} emails`);
+
+    // Split into inserts and updates
+    const contactsToInsert = [];
+    const contactsToUpdate = [];
+    const emailToEntry = new Map(); // track which entry goes with which email
+
+    for (const [email, entry] of byEmail) {
+      const contactData = transformToContact(entry.customer);
+      const existingId = emailToContactId.get(email);
+
+      if (existingId) {
+        contactData.Id = existingId;
+        contactsToUpdate.push(contactData);
+      } else {
+        contactsToInsert.push(contactData);
+      }
+      emailToEntry.set(email, entry);
+    }
+
+    // Batch insert new Contacts
+    for (let i = 0; i < contactsToInsert.length; i += batchSize) {
+      const batch = contactsToInsert.slice(i, i + batchSize);
+      try {
+        const batchResults = await this.connection.sobject('Contact').create(batch);
+        const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
+        resultsArray.forEach((res, idx) => {
+          if (res.success) {
+            results.contacts.created++;
+            emailToContactId.set(batch[idx].Email.toLowerCase(), res.id);
+          } else {
+            results.contacts.failed++;
+            const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
+            results.errors.push({ phase: 'contact-insert', email: batch[idx].Email, error: errorMsg });
+            logger.warn(`Contact insert failed for ${batch[idx].Email}: ${errorMsg}`);
+          }
+        });
+      } catch (err) {
+        logger.error('Contact insert batch failed:', err.message);
+        results.contacts.failed += batch.length;
+        results.errors.push({ phase: 'contact-insert', error: err.message });
+      }
+    }
+
+    // Batch update existing Contacts
+    for (let i = 0; i < contactsToUpdate.length; i += batchSize) {
+      const batch = contactsToUpdate.slice(i, i + batchSize);
+      try {
+        const batchResults = await this.connection.sobject('Contact').update(batch);
+        const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
+        resultsArray.forEach((res, idx) => {
+          if (res.success) {
+            results.contacts.updated++;
+          } else {
+            results.contacts.failed++;
+            const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
+            results.errors.push({ phase: 'contact-update', email: batch[idx].Email, error: errorMsg });
+            logger.warn(`Contact update failed for ${batch[idx].Email}: ${errorMsg}`);
+          }
+        });
+      } catch (err) {
+        logger.error('Contact update batch failed:', err.message);
+        results.contacts.failed += batch.length;
+        results.errors.push({ phase: 'contact-update', error: err.message });
+      }
+    }
+
+    logger.info(`Phase 1 complete: ${results.contacts.created} created, ${results.contacts.updated} updated, ${results.contacts.failed} failed`);
+
+    // --- Phase 2: Upsert TVRS_Guest__c records ---
+    logger.info(`Phase 2: Upserting TVRS_Guest__c records...`);
+
+    // Collect Contact IDs that succeeded
+    const successContactIds = [...emailToContactId.values()];
+
+    // Query existing TVRS_Guest__c for these Contacts
+    const existingGuestMap = new Map(); // "contactId|checkInDate" → guestRecordId
+    for (let i = 0; i < successContactIds.length; i += batchSize) {
+      const idBatch = successContactIds.slice(i, i + batchSize);
+      const escaped = idBatch.map(id => `'${id}'`).join(',');
+      const query = `SELECT Id, ${contactLookup}, Check_In_Date__c FROM ${guestObject} WHERE ${contactLookup} IN (${escaped})`;
+
+      try {
+        let result = await this.connection.query(query);
+        let allRecords = result.records;
+        while (!result.done) {
+          result = await this.connection.queryMore(result.nextRecordsUrl);
+          allRecords = allRecords.concat(result.records);
+        }
+        for (const rec of allRecords) {
+          if (rec[contactLookup] && rec.Check_In_Date__c) {
+            const key = `${rec[contactLookup]}|${rec.Check_In_Date__c}`;
+            existingGuestMap.set(key, rec.Id);
+          }
+        }
+      } catch (err) {
+        logger.error('Error querying existing TVRS_Guest__c:', err.message);
+        results.errors.push({ phase: 'guest-query', error: err.message });
+      }
+    }
+
+    logger.info(`Found ${existingGuestMap.size} existing TVRS_Guest__c records for matched Contacts`);
+
+    // Build TVRS_Guest__c records, split into creates vs updates
+    const guestsToCreate = [];
+    const guestsToUpdate = [];
+
+    for (const [email, entry] of byEmail) {
+      const contactId = emailToContactId.get(email);
+      if (!contactId) {
+        // Contact failed to create — skip guest record
+        continue;
+      }
+
+      const guestRecord = transformToTVRSGuest(entry.customer, entry.invoice, contactId);
+      const checkInDate = guestRecord.Check_In_Date__c || null;
+      const matchKey = checkInDate ? `${contactId}|${checkInDate}` : null;
+      const existingId = matchKey ? existingGuestMap.get(matchKey) : null;
+
+      if (existingId) {
+        guestRecord.Id = existingId;
+        guestsToUpdate.push(guestRecord);
+      } else {
+        guestsToCreate.push(guestRecord);
+      }
+    }
+
+    // Batch create new TVRS_Guest__c
+    for (let i = 0; i < guestsToCreate.length; i += batchSize) {
+      const batch = guestsToCreate.slice(i, i + batchSize);
+      try {
+        const batchResults = await this.connection.sobject(guestObject).create(batch);
+        const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
+        resultsArray.forEach((res, idx) => {
+          if (res.success) {
+            results.guests.created++;
+            logger.debug(`TVRS_Guest__c created: ${res.id} for ${batch[idx].Email__c}`);
+          } else {
+            results.guests.failed++;
+            const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
+            results.errors.push({ phase: 'guest-create', email: batch[idx].Email__c, error: errorMsg });
+            logger.warn(`TVRS_Guest__c create failed for ${batch[idx].Email__c}: ${errorMsg}`);
+          }
+        });
+      } catch (err) {
+        logger.error('TVRS_Guest__c create batch failed:', err.message);
+        results.guests.failed += batch.length;
+        results.errors.push({ phase: 'guest-create', error: err.message });
+      }
+    }
+
+    // Batch update existing TVRS_Guest__c
+    for (let i = 0; i < guestsToUpdate.length; i += batchSize) {
+      const batch = guestsToUpdate.slice(i, i + batchSize);
+      try {
+        const batchResults = await this.connection.sobject(guestObject).update(batch);
+        const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
+        resultsArray.forEach((res, idx) => {
+          if (res.success) {
+            results.guests.updated++;
+            logger.debug(`TVRS_Guest__c updated: ${res.id} for ${batch[idx].Email__c}`);
+          } else {
+            results.guests.failed++;
+            const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
+            results.errors.push({ phase: 'guest-update', email: batch[idx].Email__c, error: errorMsg });
+            logger.warn(`TVRS_Guest__c update failed for ${batch[idx].Email__c}: ${errorMsg}`);
+          }
+        });
+      } catch (err) {
+        logger.error('TVRS_Guest__c update batch failed:', err.message);
+        results.guests.failed += batch.length;
+        results.errors.push({ phase: 'guest-update', error: err.message });
+      }
+    }
+
+    const totalSuccess = results.contacts.created + results.contacts.updated + results.guests.created + results.guests.updated;
+    const totalFailed = results.contacts.failed + results.guests.failed;
+    logger.info(`Phase 2 complete: ${results.guests.created} created, ${results.guests.updated} updated, ${results.guests.failed} failed`);
+    logger.info(`Sync complete: ${totalSuccess} total operations succeeded, ${totalFailed} failed`);
+
+    // Return a flat summary for backwards compatibility with notifier/stats
+    results.success = results.guests.created + results.guests.updated;
+    results.failed = results.contacts.failed + results.guests.failed;
+
+    return results;
   }
 
   /**

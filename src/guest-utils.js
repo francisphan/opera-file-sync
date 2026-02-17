@@ -59,14 +59,34 @@ function mapLanguageToSalesforce(oracleLanguage) {
 }
 
 /**
+ * Transform guest data to Salesforce Contact format
+ * @param {Object} customer - Customer data (email, firstName, lastName, phone, language, billingCity, billingState, billingCountry)
+ * @returns {Object} Salesforce Contact record
+ */
+function transformToContact(customer) {
+  return {
+    Email: customer.email,
+    FirstName: customer.firstName,
+    LastName: customer.lastName,
+    Phone: customer.phone || null,
+    MailingCity: customer.billingCity || null,
+    MailingState: customer.billingState || null,
+    MailingCountry: customer.billingCountry || null
+  };
+}
+
+/**
  * Transform guest data to TVRS_Guest__c format
  * @param {Object} customer - Customer data (email, firstName, lastName, phone, language, billingCity, billingState, billingCountry)
  * @param {Object} invoice - Invoice/reservation data with checkIn/checkOut (optional)
- * @returns {Object} Salesforce record
+ * @param {string} [contactId] - Salesforce Contact ID to link via lookup
+ * @returns {Object} Salesforce TVRS_Guest__c record
  */
-function transformToTVRSGuest(customer, invoice) {
+function transformToTVRSGuest(customer, invoice, contactId) {
+  const contactLookup = process.env.SF_GUEST_CONTACT_LOOKUP || 'Contact__c';
+
   const record = {
-    // External ID (required for upsert)
+    // External ID
     Email__c: customer.email,
 
     // Guest information
@@ -102,6 +122,11 @@ function transformToTVRSGuest(customer, invoice) {
     Ready_for_PV_mail__c: false
   };
 
+  // Link to Contact if provided
+  if (contactId) {
+    record[contactLookup] = contactId;
+  }
+
   // Add check-in/out dates if available
   if (invoice) {
     if (invoice.checkIn) {
@@ -118,6 +143,7 @@ function transformToTVRSGuest(customer, invoice) {
 module.exports = {
   AGENT_DOMAIN_KEYWORDS,
   isAgentEmail,
+  transformToContact,
   transformToTVRSGuest,
   mapLanguageToSalesforce
 };

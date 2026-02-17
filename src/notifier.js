@@ -238,50 +238,10 @@ class Notifier {
 
   /**
    * Notify about successful file processing
+   * Note: Email skipped for per-sync events — success stats go in the daily summary.
    */
   async notifyFileProcessed(filename, recordCount, filteredCount) {
-    const subject = `OPERA Sync - ${filename} processed (${recordCount} records)`;
-    const filteredNote = filteredCount > 0 ? `\n${filteredCount} agent/company emails were filtered out.` : '';
-
-    const textBody = `
-OPERA Sync - File Processed Successfully
-=========================================
-
-File: ${filename}
-Records Synced: ${recordCount}
-Time: ${new Date().toISOString()}
-${filteredNote}
-    `.trim();
-
-    const htmlBody = `
-      <h2>OPERA Sync - File Processed</h2>
-      <table style="border-collapse: collapse; margin: 20px 0;">
-        <tr style="background: #d4edda;">
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Status</td>
-          <td style="padding: 8px; border: 1px solid #ddd; color: green;">Success</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">File</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${filename}</td>
-        </tr>
-        <tr style="background: #f5f5f5;">
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Records Synced</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${recordCount}</td>
-        </tr>
-        ${filteredCount > 0 ? `<tr>
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Filtered Out</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${filteredCount} agent/company emails</td>
-        </tr>` : ''}
-        <tr style="background: #f5f5f5;">
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Time</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${new Date().toISOString()}</td>
-        </tr>
-      </table>
-    `;
-
-    if (this.emailEnabled) {
-      await this.sendEmail(subject, textBody, htmlBody);
-    }
+    logger.info(`Processed ${filename}: ${recordCount} records synced${filteredCount > 0 ? `, ${filteredCount} filtered` : ''}`);
 
     if (this.slackEnabled) {
       let text = `:white_check_mark: *OPERA Sync* — \`${filename}\` processed successfully\n*${recordCount}* records synced to Salesforce`;
@@ -294,6 +254,7 @@ ${filteredNote}
 
   /**
    * Notify about filtered agent/non-guest emails
+   * Note: Email skipped for per-sync events — filtered stats go in the daily summary.
    */
   async notifyFilteredAgents(filename, filteredRecords) {
     if (filteredRecords.length === 0) {
@@ -301,73 +262,15 @@ ${filteredNote}
     }
 
     const count = filteredRecords.length;
-    const subject = `OPERA Sync - Filtered Agent Emails (${count})`;
-
-    const tableRows = filteredRecords.map(r => {
-      return `<tr>
-        <td style="padding: 6px; border: 1px solid #ddd;">${r.email}</td>
-        <td style="padding: 6px; border: 1px solid #ddd;">${r.firstName}</td>
-        <td style="padding: 6px; border: 1px solid #ddd;">${r.lastName}</td>
-        <td style="padding: 6px; border: 1px solid #ddd;">${r.operaId}</td>
-        <td style="padding: 6px; border: 1px solid #ddd;">${r.category}</td>
-      </tr>`;
-    }).join('\n');
-
-    const textLines = filteredRecords.map(r =>
-      `  ${r.email} | ${r.firstName} ${r.lastName} | ${r.operaId} | ${r.category}`
-    ).join('\n');
-
-    const textBody = `
-OPERA Sync - Filtered Agent Emails
-===================================
-
-File: ${filename}
-Filtered: ${count} records
-Time: ${new Date().toISOString()}
-
-These records were excluded from the Salesforce sync because they
-appear to be travel agents, OTA proxies, or company entries.
-
-${textLines}
-
-If any of these are real guests, they can be manually added to Salesforce.
-    `.trim();
-
-    const htmlBody = `
-      <h2>OPERA Sync - Filtered Agent Emails</h2>
-      <p><strong>File:</strong> ${filename}<br>
-      <strong>Filtered:</strong> ${count} records<br>
-      <strong>Time:</strong> ${new Date().toISOString()}</p>
-
-      <p>These records were excluded from the Salesforce sync because they
-      appear to be travel agents, OTA proxies, or company entries.
-      If any are real guests, they can be manually added.</p>
-
-      <table style="border-collapse: collapse; margin: 20px 0; font-size: 13px;">
-        <tr style="background: #f5f5f5;">
-          <th style="padding: 6px; border: 1px solid #ddd; text-align: left;">Email</th>
-          <th style="padding: 6px; border: 1px solid #ddd; text-align: left;">First Name</th>
-          <th style="padding: 6px; border: 1px solid #ddd; text-align: left;">Last Name</th>
-          <th style="padding: 6px; border: 1px solid #ddd; text-align: left;">Opera ID</th>
-          <th style="padding: 6px; border: 1px solid #ddd; text-align: left;">Category</th>
-        </tr>
-        ${tableRows}
-      </table>
-    `;
-
-    if (this.emailEnabled) {
-      await this.sendEmail(subject, textBody, htmlBody);
-    }
+    logger.info(`Filtered ${count} agent/company emails from ${filename}`);
 
     if (this.slackEnabled) {
       const slackLines = filteredRecords.slice(0, 10).map(r =>
         `  ${r.email} — ${r.firstName} ${r.lastName} (${r.category})`
       ).join('\n');
       const more = count > 10 ? `\n  _...and ${count - 10} more_` : '';
-      await this.sendSlackMessage(`:mag: *OPERA Sync - Filtered ${count} Agent Emails*\nFile: \`${filename}\`\n\`\`\`${slackLines}${more}\`\`\`\n_Check email for full list_`);
+      await this.sendSlackMessage(`:mag: *OPERA Sync - Filtered ${count} Agent Emails*\nFile: \`${filename}\`\n\`\`\`${slackLines}${more}\`\`\`\n_See daily summary for details_`);
     }
-
-    logger.info(`Filtered agents notification sent for ${count} records`);
   }
 
   /**

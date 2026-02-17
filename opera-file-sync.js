@@ -17,7 +17,6 @@ const SalesforceClient = require('./src/salesforce-client');
 const FileTracker = require('./src/file-tracker');
 const Notifier = require('./src/notifier');
 const DailyStats = require('./src/daily-stats');
-const DuplicateDetector = require('./src/duplicate-detector');
 const { setupDailySummary } = require('./src/scheduler');
 const { parseCSV, isCSV } = require('./src/parsers/csv-parser');
 const { parseXML, isXML } = require('./src/parsers/xml-parser');
@@ -46,7 +45,6 @@ let sfClient;
 let fileTracker;
 let notifier;
 let dailyStats;
-let duplicateDetector;
 let isProcessing = false;
 
 /**
@@ -81,9 +79,6 @@ async function initialize() {
 
   // Initialize Salesforce client
   sfClient = new SalesforceClient(CONFIG.salesforce);
-
-  // Initialize duplicate detector
-  duplicateDetector = new DuplicateDetector(sfClient);
 
   // Setup daily summary scheduler
   setupDailySummary(notifier, dailyStats, fileTracker);
@@ -273,6 +268,7 @@ async function processFile(filePath) {
     // Parse file based on format
     let records;
     let filtered;
+    let isOperaFormat = false;
 
     // Check if this is an OPERA customers file
     if (filename.match(/customers\d{8}\.csv$/i)) {
@@ -290,6 +286,7 @@ async function processFile(filePath) {
       const result = await parseOPERAFiles(filePath, invoicesFile);
       records = result.records;
       filtered = result.filtered;
+      isOperaFormat = true;
     } else if (filename.match(/invoices\d{8}\.csv$/i)) {
       logger.info('Detected OPERA invoices CSV format');
 
@@ -306,6 +303,7 @@ async function processFile(filePath) {
       const result = await parseOPERAFiles(customersFile, filePath);
       records = result.records;
       filtered = result.filtered;
+      isOperaFormat = true;
     } else if (isCSV(filePath)) {
       logger.info('Detected generic CSV format');
       records = await parseCSV(filePath);
@@ -330,63 +328,18 @@ async function processFile(filePath) {
 
     logger.info(`Extracted ${records.length} records from file`);
 
-    // Duplicate detection
-    const duplicates = [];
-    const recordsToSync = [];
-
-    for (const record of records) {
-      const customer = {
-        firstName: record.Guest_First_Name__c || '',
-        lastName: record.Guest_Last_Name__c || '',
-        email: record.Email__c || '',
-        billingCity: record.City__c || '',
-        billingState: record.State_Province__c || '',
-        billingCountry: record.Country__c || ''
-      };
-
-      const invoice = {
-        checkIn: record.Check_In_Date__c || '',
-        checkOut: record.Check_Out_Date__c || ''
-      };
-
-      const dupCheck = await duplicateDetector.checkForDuplicates(customer, invoice);
-
-      if (dupCheck.isDuplicate) {
-        duplicates.push({
-          email: customer.email,
-          firstName: customer.firstName,
-          lastName: customer.lastName,
-          probability: dupCheck.probability,
-          matches: dupCheck.matches,
-          category: 'duplicate-detected'
-        });
-        logger.debug(`Skipping duplicate: ${customer.firstName} ${customer.lastName} (${customer.email}) - ${dupCheck.probability}% probability`);
-      } else {
-        recordsToSync.push(record);
-      }
-    }
-
-    // Notify about duplicates if any were detected
-    if (duplicates.length > 0) {
-      logger.info(`Detected ${duplicates.length} potential duplicates (skipped)`);
-      await notifier.notifyDuplicatesDetected(filename, duplicates);
-      dailyStats.addSkipped('duplicate', duplicates.length);
-    }
-
-    if (recordsToSync.length === 0) {
-      logger.warn('All records were filtered or duplicates - nothing to sync');
+    if (records.length === 0) {
+      logger.warn('No records to sync after extraction');
       handleSuccessfulProcessing(filePath, 0);
       return;
     }
 
-    logger.info(`Syncing ${recordsToSync.length} records to Salesforce (${duplicates.length} duplicates skipped)`);
+    logger.info(`Syncing ${records.length} records to Salesforce...`);
 
     // Sync to Salesforce
-    const results = await sfClient.syncRecords(
-      recordsToSync,
-      CONFIG.salesforce.objectType,
-      CONFIG.salesforce.externalIdField
-    );
+    const results = isOperaFormat
+      ? await sfClient.syncGuestCheckIns(records)
+      : await sfClient.syncRecords(records, CONFIG.salesforce.objectType, CONFIG.salesforce.externalIdField);
 
     // Check results
     if (results.failed > 0) {
