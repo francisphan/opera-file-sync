@@ -7,7 +7,7 @@
  */
 
 const logger = require('./logger');
-const { isAgentEmail } = require('./guest-utils');
+const { sanitizeEmail, isAgentEmail } = require('./guest-utils');
 
 /**
  * Format a JS Date as YYYY-MM-DD for Salesforce
@@ -76,22 +76,26 @@ async function queryGuestsByIds(oracleClient, nameIds) {
     `, binds);
 
     for (const row of rows) {
+      // Sanitize email (fix typos, transliterate international chars)
+      const rawEmail = (row.EMAIL || '').trim();
+      const cleanedEmail = sanitizeEmail(rawEmail);
+
+      if (!cleanedEmail) {
+        logger.debug(`Skipping NAME_ID ${row.NAME_ID} - invalid email: ${rawEmail}`);
+        continue;
+      }
+
       const customer = {
         operaId: String(row.NAME_ID),
         firstName: (row.FIRST || '').trim(),
         lastName: (row.LAST || '').trim(),
-        email: (row.EMAIL || '').trim(),
+        email: cleanedEmail,
         phone: (row.PHONE || '').trim(),
         language: (row.LANGUAGE || '').trim(),
         billingCity: (row.CITY || '').trim(),
         billingState: (row.STATE || '').trim(),
         billingCountry: (row.COUNTRY || '').trim()
       };
-
-      if (!customer.email || !customer.email.includes('@')) {
-        logger.debug(`Skipping NAME_ID ${row.NAME_ID} - no valid email`);
-        continue;
-      }
 
       const agentCategory = isAgentEmail(customer);
       if (agentCategory) {

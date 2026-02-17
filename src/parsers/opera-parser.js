@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const csvParser = require('csv-parser');
 const logger = require('../logger');
-const { isAgentEmail, AGENT_DOMAIN_KEYWORDS } = require('../guest-utils');
+const { sanitizeEmail, isAgentEmail, AGENT_DOMAIN_KEYWORDS } = require('../guest-utils');
 
 /**
  * Parse customers CSV file
@@ -26,11 +26,15 @@ async function parseCustomers(filePath) {
       .on('data', (row) => {
         const operaId = row['Opera Internal ID'];
         if (operaId && operaId.trim()) {
+          // Sanitize email (fix typos, transliterate international chars)
+          const rawEmail = row['Email Address'] || '';
+          const cleanedEmail = sanitizeEmail(rawEmail) || rawEmail.trim();
+
           customers.set(operaId.trim(), {
             operaId: operaId.trim(),
             firstName: row['First Name'] || '',
             lastName: row['Last Name'] || '',
-            email: row['Email Address'] || '',
+            email: cleanedEmail,
             phone: row['Phone'] || '',
             billingAddress: row['BILLING_ADDRESS'] || '',
             billingCity: row['Billing City'] || '',
