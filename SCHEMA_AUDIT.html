@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; color: #333; max-width: 900px; margin: 0 auto; padding: 20px; line-height: 1.6; font-size: 14px; }
+  h1 { color: #1a1a2e; border-bottom: 3px solid #0066cc; padding-bottom: 10px; font-size: 22px; }
+  h2 { color: #0066cc; margin-top: 40px; font-size: 17px; border-bottom: 1px solid #ddd; padding-bottom: 6px; }
+  h3 { color: #444; font-size: 14px; margin-top: 20px; margin-bottom: 8px; }
+  .date { color: #888; font-size: 13px; }
+  .intro { background: #f0f4ff; padding: 15px 20px; border-radius: 6px; margin: 20px 0; border-left: 4px solid #0066cc; }
+  .summary-grid { display: flex; gap: 15px; margin: 20px 0; flex-wrap: wrap; }
+  .summary-card { background: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; padding: 15px 20px; flex: 1; min-width: 180px; text-align: center; }
+  .summary-card .num { font-size: 28px; font-weight: 700; color: #0066cc; }
+  .summary-card .label { font-size: 12px; color: #666; margin-top: 4px; }
+  table { border-collapse: collapse; width: 100%; margin: 15px 0; font-size: 13px; }
+  th { background: #0066cc; color: white; padding: 10px 12px; text-align: left; font-weight: 600; }
+  td { padding: 8px 12px; border: 1px solid #ddd; }
+  tr:nth-child(even) { background: #f9f9f9; }
+  .pct-bar { display: inline-block; height: 8px; border-radius: 4px; vertical-align: middle; margin-right: 6px; }
+  .pct-0 { background: #c62828; width: 3px; }
+  .pct-low { background: #ff9800; }
+  .pct-mid { background: #fdd835; }
+  .pct-high { background: #4caf50; }
+  .tag-dead { background: #ffebee; color: #c62828; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .tag-low { background: #fff3e0; color: #e65100; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .tag-ok { background: #e8f5e9; color: #2e7d32; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .tag-dup { background: #e3f2fd; color: #1565c0; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .callout { padding: 12px 18px; border-radius: 6px; margin: 15px 0; }
+  .callout-red { background: #ffebee; border-left: 4px solid #c62828; }
+  .callout-orange { background: #fff3e0; border-left: 4px solid #ff9800; }
+  .callout-green { background: #e8f5e9; border-left: 4px solid #4caf50; }
+  .callout-blue { background: #e3f2fd; border-left: 4px solid #1565c0; }
+  .section-num { background: #0066cc; color: white; border-radius: 50%; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; margin-right: 8px; }
+  .obj-header { background: #1a1a2e; color: white; padding: 12px 20px; border-radius: 6px; margin-top: 30px; }
+  .obj-header span { font-size: 13px; color: #aaa; margin-left: 10px; }
+  ul { padding-left: 20px; }
+  li { margin-bottom: 4px; }
+  .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; color: #888; font-size: 12px; }
+  .toc { background: #f5f5f5; padding: 15px 25px; border-radius: 6px; margin: 20px 0; }
+  .toc a { color: #0066cc; text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .toc li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Salesforce Schema Audit</h1>
+<p class="date">February 17, 2026 &mdash; OPERA Guest Sync</p>
+
+<div class="intro">
+  I ran a full audit of four Salesforce objects &mdash; <strong>Contact</strong>, <strong>TVRS_Guest__c</strong>, <strong>Opportunity</strong>, and <strong>Lead</strong> &mdash; checking every custom field against live data to identify unused, redundant, or misplaced fields. Here's what I found.
+</div>
+
+<div class="summary-grid">
+  <div class="summary-card">
+    <div class="num">86,476</div>
+    <div class="label">Contacts</div>
+  </div>
+  <div class="summary-card">
+    <div class="num">21,477</div>
+    <div class="label">TVRS Guest Records</div>
+  </div>
+  <div class="summary-card">
+    <div class="num">9,321</div>
+    <div class="label">Opportunities</div>
+  </div>
+  <div class="summary-card">
+    <div class="num">11,918</div>
+    <div class="label">Leads</div>
+  </div>
+</div>
+
+<div class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#sigparser">SigParser Fields &mdash; Completely Dead (70+ fields across Contact &amp; Lead)</a></li>
+    <li><a href="#contact">Contact &mdash; Unused &amp; Redundant Fields</a></li>
+    <li><a href="#tvrs">TVRS_Guest__c &mdash; Unused &amp; Misplaced Fields</a></li>
+    <li><a href="#opp">Opportunity &mdash; Unused &amp; Redundant Fields</a></li>
+    <li><a href="#lead">Lead &mdash; Unused Fields</a></li>
+    <li><a href="#cross">Cross-Object Duplication</a></li>
+    <li><a href="#recs">Recommendations Summary</a></li>
+  </ol>
+</div>
+
+<!-- ==================== SIGPARSER ==================== -->
+<h2 id="sigparser"><span class="section-num">1</span> SigParser Fields &mdash; Completely Dead</h2>
+
+<div class="callout callout-red">
+  <strong>~35 SigParser (reldata__) fields on Contact and ~35 on Lead have 0% usage across all records.</strong> It looks like SigParser was installed but never activated or has since been decommissioned. These fields are pure clutter.
+</div>
+
+<p>Contact has 35 reldata__ fields, all at 0%. Lead has another 35, also all 0%. Examples:</p>
+
+<table>
+  <tr><th>Field</th><th>Object(s)</th><th>Usage</th></tr>
+  <tr><td>reldata__Address_City__c, State, Country, Street, Postal_Code</td><td>Contact, Lead</td><td><span class="tag-dead">0%</span></td></tr>
+  <tr><td>reldata__Emails_From__c, Emails_To__c, Emails_Included__c</td><td>Contact, Lead</td><td><span class="tag-dead">0%</span></td></tr>
+  <tr><td>reldata__Meetings__c, Meetings_Completed__c, Meetings_Upcoming__c</td><td>Contact, Lead</td><td><span class="tag-dead">0%</span></td></tr>
+  <tr><td>reldata__LinkedIn_Url__c, Twitter_Url__c</td><td>Contact, Lead</td><td><span class="tag-dead">0%</span></td></tr>
+  <tr><td>reldata__First_Name__c, Last_Name__c, Job_Title__c</td><td>Contact, Lead</td><td><span class="tag-dead">0%</span></td></tr>
+  <tr><td>reldata__SigParser_Phone__c, Mobile_Phone__c, Work_Phone__c</td><td>Contact, Lead</td><td><span class="tag-dead">0%</span></td></tr>
+  <tr><td>reldata__Total_Interactions__c</td><td>Contact</td><td>100% &mdash; but auto-defaulted to 0, not real data</td></tr>
+</table>
+
+<p><strong>Recommendation:</strong> If SigParser is no longer in use, uninstall the managed package. This removes all ~70 fields at once.</p>
+
+<!-- ==================== CONTACT ==================== -->
+<h2 id="contact"><span class="section-num">2</span> Contact (86,476 records)</h2>
+
+<h3>Completely Unused Fields (0% populated)</h3>
+<table>
+  <tr><th>Field</th><th>Label</th><th>Usage</th><th>Assessment</th></tr>
+  <tr><td>pi__Needs_Score_Synced__c</td><td>Needs Score Synced</td><td><span class="tag-dead">0%</span></td><td>Pardot internal flag &mdash; should be auto-managed, verify if broken</td></tr>
+  <tr><td>pi__grade__c</td><td>AE Grade</td><td><span class="tag-dead">0%</span></td><td>Pardot grading not configured</td></tr>
+  <tr><td>pi__utm_campaign/content/medium/source/term__c</td><td>Google Analytics fields (5)</td><td><span class="tag-dead">0%</span></td><td>UTM tracking never set up in Pardot &mdash; remove or configure</td></tr>
+  <tr><td>Interested_in_Kosher__c</td><td>Interested in Kosher</td><td><span class="tag-dead">0%</span></td><td>Never used &mdash; delete</td></tr>
+  <tr><td>Investment_Date__c</td><td>Investment Date</td><td><span class="tag-dead">0%</span></td><td>Never used &mdash; delete</td></tr>
+  <tr><td>Newsletter_Subscriber__c</td><td>Newsletter Subscriber</td><td><span class="tag-dead">0%</span></td><td>Never used &mdash; delete</td></tr>
+  <tr><td>Create_salesforce_contact__c</td><td>Create salesforce contact</td><td><span class="tag-dead">0%</span></td><td>Looks like a flow utility flag &mdash; verify &amp; delete</td></tr>
+  <tr><td>TVRS_Guest__c</td><td>TVRS Guest (lookup)</td><td><span class="tag-dead">0%</span></td><td>Reverse lookup never populated &mdash; relationship goes the other way (Guest&rarr;Contact)</td></tr>
+  <tr><td>In_Conversation_PV__c</td><td>In Conversation - PV</td><td><span class="tag-dead">0%</span></td><td>Never used on Contact</td></tr>
+  <tr><td>Mail_Type_PV__c</td><td>Mail Type - PV</td><td><span class="tag-dead">0%</span></td><td>Never used on Contact</td></tr>
+  <tr><td>PV_campaign_email_sent__c</td><td>PV campaign email sent</td><td><span class="tag-dead">0%</span></td><td>Never used</td></tr>
+  <tr><td>Form_Source_PV__c</td><td>Form Source PV</td><td><span class="tag-dead">0%</span></td><td>Never used</td></tr>
+</table>
+
+<h3>Very Low Usage (&lt;1%)</h3>
+<table>
+  <tr><th>Field</th><th>Label</th><th>Usage</th><th>Assessment</th></tr>
+  <tr><td>pi__conversion_date__c</td><td>AE Conversion Date</td><td>23/86k (0%)</td><td>Only 23 records &mdash; Pardot conversion barely used</td></tr>
+  <tr><td>Interested_in_Private_Vineyard__c</td><td>Interested in PV</td><td>3/86k (0%)</td><td>3 records &mdash; consider deleting</td></tr>
+  <tr><td>Investment_Amount__c</td><td>Investment Amount</td><td>1/86k (0%)</td><td>1 record &mdash; likely obsolete</td></tr>
+  <tr><td>Instagram_Account__c</td><td>Instagram Account</td><td>14/86k (0%)</td><td>Barely used</td></tr>
+  <tr><td>Stripe_Customer_Id__c</td><td>Stripe Customer Id</td><td>1/86k (0%)</td><td>1 record &mdash; pilot that didn't continue?</td></tr>
+  <tr><td>of_Owned_Lots__c</td><td># of Owned Lots</td><td>7/86k (0%)</td><td>Very sparse</td></tr>
+</table>
+
+<h3>Unclear or Questionable Fields</h3>
+<table>
+  <tr><th>Field</th><th>Label</th><th>Usage</th><th>Question</th></tr>
+  <tr><td>Selected_1__c</td><td>Selected 1</td><td>46,593 (54%)</td><td>What does this mean? Generic name, over half of records have it set</td></tr>
+  <tr><td>Check__c</td><td>Check</td><td>47,586 (55%)</td><td>What is "Check"? Very ambiguous name</td></tr>
+  <tr><td>Contact_ID_Mirror__c</td><td>Contact ID Mirror</td><td>85,186 (99%)</td><td>Duplicates the standard Id field &mdash; why does this exist?</td></tr>
+  <tr><td>X18_digit_contactid__c</td><td>18 digit contactid</td><td>86,476 (100%)</td><td>Also duplicates the standard Id &mdash; likely for formula/integration use, but is it still needed?</td></tr>
+  <tr><td>Check_in_date_C__c</td><td>Check in date C</td><td>15,679 (18%)</td><td><span class="tag-dup">DUPLICATE</span> Check-in dates belong on TVRS_Guest__c, not Contact</td></tr>
+  <tr><td>Check_out_Date_C__c</td><td>Check Out Date C</td><td>14,469 (17%)</td><td><span class="tag-dup">DUPLICATE</span> Same &mdash; check-out dates belong on the stay record</td></tr>
+</table>
+
+<!-- ==================== TVRS GUEST ==================== -->
+<h2 id="tvrs"><span class="section-num">3</span> TVRS_Guest__c (21,477 records)</h2>
+
+<h3>Completely Unused Fields (0% populated)</h3>
+<table>
+  <tr><th>Field</th><th>Label</th><th>Usage</th><th>Assessment</th></tr>
+  <tr><td>Room__c</td><td>Room Occupancy</td><td><span class="tag-dead">0%</span></td><td>Never populated &mdash; delete</td></tr>
+  <tr><td>X7F__c</td><td>7F</td><td><span class="tag-dead">0%</span></td><td>Unclear what "7F" means &mdash; never used &mdash; delete</td></tr>
+  <tr><td>Brochure_Clicked__c</td><td>Brochure Clicked</td><td><span class="tag-dead">0%</span></td><td>Never used on guest record</td></tr>
+  <tr><td>Comply_Tasting_Date__c</td><td>Comply Tasting Date</td><td><span class="tag-dead">0%</span></td><td>Never populated &mdash; delete</td></tr>
+  <tr><td>In_Conversation_PV__c</td><td>In Conversation - PV</td><td><span class="tag-dead">0%</span></td><td>Never used &mdash; person-level field anyway</td></tr>
+  <tr><td>Mail_Type_PV__c</td><td>Mail Type - PV</td><td><span class="tag-dead">0%</span></td><td>Never used</td></tr>
+  <tr><td>Ready_for_PV_mail__c</td><td>Ready for PV mail</td><td><span class="tag-dead">0%</span></td><td>Never used on guest record &mdash; person-level field</td></tr>
+</table>
+
+<h3>Very Low Usage (&lt;1%)</h3>
+<table>
+  <tr><th>Field</th><th>Label</th><th>Usage</th><th>Assessment</th></tr>
+  <tr><td>Replied_to_Mkt_campaign_2025__c</td><td>Replied to Mkt campaign 2025</td><td>2/21k (0%)</td><td>Year-specific &mdash; barely used &mdash; what's the plan for 2026?</td></tr>
+  <tr><td>In_Conversation__c</td><td>In Conversation</td><td>5/21k (0%)</td><td>Person-level concept on a stay record &mdash; Contact has the same field with 29 records</td></tr>
+  <tr><td>Not_interested__c</td><td>Not interested</td><td>5/21k (0%)</td><td>Person-level &mdash; barely used here</td></tr>
+  <tr><td>Follow_up__c</td><td>Follow up</td><td>1/21k (0%)</td><td>1 record &mdash; person-level field</td></tr>
+  <tr><td>Form_source__c</td><td>Form source</td><td>28/21k (0%)</td><td>Very sparse &mdash; web form tracking belongs elsewhere</td></tr>
+  <tr><td>Status__c</td><td>Status</td><td>75/21k (0%)</td><td>What statuses? Only 75 records out of 21k</td></tr>
+  <tr><td>Villa__c</td><td>Villa</td><td>10/21k (0%)</td><td>10 records &mdash; barely used</td></tr>
+  <tr><td>TVG__c</td><td>TVG</td><td>40/21k (0%)</td><td>Very sparse</td></tr>
+  <tr><td>Attended_Happy_Hour__c</td><td>Attended Happy Hour</td><td>89/21k (0%)</td><td>Very sparse</td></tr>
+  <tr><td>Preferred_Contact_Method__c</td><td>Preferred Contact Method</td><td>19/21k (0%)</td><td>Person-level preference, not stay-level</td></tr>
+  <tr><td>Preferred_Time_and_Day__c</td><td>Preferred Time and Day</td><td>20/21k (0%)</td><td>Person-level preference, not stay-level</td></tr>
+</table>
+
+<h3>Fields That Duplicate Contact Data</h3>
+<div class="callout callout-blue">
+  Since TVRS_Guest__c now has a Contact__c lookup (78% populated), these fields are accessible via the relationship and don't need to be stored on both objects:
+</div>
+<table>
+  <tr><th>TVRS_Guest__c Field</th><th>Contact Equivalent</th><th>Guest Usage</th><th>Recommendation</th></tr>
+  <tr><td>Guest_First_Name__c</td><td>Contact.FirstName</td><td>99%</td><td><span class="tag-dup">REDUNDANT</span> Remove from Guest</td></tr>
+  <tr><td>Guest_Last_Name__c</td><td>Contact.LastName</td><td>99%</td><td><span class="tag-dup">REDUNDANT</span> Remove from Guest</td></tr>
+  <tr><td>Telephone__c</td><td>Contact.Phone</td><td>67%</td><td><span class="tag-dup">REDUNDANT</span> Remove from Guest</td></tr>
+  <tr><td>City__c</td><td>Contact.MailingCity</td><td>68%</td><td><span class="tag-dup">REDUNDANT</span> Remove from Guest</td></tr>
+  <tr><td>State_Province__c</td><td>Contact.MailingState</td><td>22%</td><td><span class="tag-dup">REDUNDANT</span> Remove from Guest</td></tr>
+  <tr><td>Country__c</td><td>Contact.MailingCountry</td><td>78%</td><td><span class="tag-dup">REDUNDANT</span> Remove from Guest</td></tr>
+  <tr><td>Ready_for_pardot_email_list__c</td><td>Contact.Ready_for_pardot_email_list__c</td><td>13%</td><td><span class="tag-dup">REDUNDANT</span> Person-level &mdash; use Contact version (73%)</td></tr>
+</table>
+
+<!-- ==================== OPPORTUNITY ==================== -->
+<h2 id="opp"><span class="section-num">4</span> Opportunity (9,321 records)</h2>
+
+<h3>Completely Unused Fields (0%)</h3>
+<table>
+  <tr><th>Field</th><th>Label</th><th>Usage</th><th>Assessment</th></tr>
+  <tr><td>TVRS_Guest__c</td><td>TVRS Guest (lookup)</td><td><span class="tag-dead">0%</span></td><td>Never linked &mdash; opportunities link to Account/Contact instead</td></tr>
+  <tr><td>Travel_for_wine__c</td><td>Travel for wine</td><td><span class="tag-dead">0%</span></td><td>Never used &mdash; delete</td></tr>
+  <tr><td>CUIT__c</td><td>CUIT</td><td><span class="tag-dead">0%</span></td><td>Argentine tax ID &mdash; never populated &mdash; delete or move to Account</td></tr>
+</table>
+
+<h3>Near-Zero Usage (&lt;1%)</h3>
+<table>
+  <tr><th>Field</th><th>Label</th><th>Usage</th><th>Assessment</th></tr>
+  <tr><td>Budget_Confirmed__c</td><td>Budget Confirmed</td><td>1/9k (0%)</td><td>BANT methodology field &mdash; not adopted</td></tr>
+  <tr><td>ROI_Analysis_Completed__c</td><td>ROI Analysis Completed</td><td>1/9k (0%)</td><td>Same &mdash; BANT not adopted</td></tr>
+  <tr><td>Discovery_Completed__c</td><td>Discovery Completed</td><td>3/9k (0%)</td><td>Same</td></tr>
+  <tr><td>Wine_preferences__c</td><td>Wine preferences</td><td>2/9k (0%)</td><td>Barely used &mdash; better on Contact?</td></tr>
+  <tr><td>Interested_in_Villa_ownership__c</td><td>Interested in Villa ownership</td><td>7/9k (0%)</td><td>Very sparse</td></tr>
+  <tr><td>Villa_Category__c</td><td>Villa Category</td><td>13/9k (0%)</td><td>Very sparse</td></tr>
+  <tr><td>Mes_Recontacto_Follow_Up__c</td><td>Mes Recontacto / Follow Up</td><td>15/9k (0%)</td><td>Spanish-named field &mdash; barely used</td></tr>
+  <tr><td>Title_Holder_3__c</td><td>Title Holder 3</td><td>1/9k (0%)</td><td>1 record &mdash; do you really need 3 title holder fields?</td></tr>
+  <tr><td>Title_Holder_2__c</td><td>Title Holder 2</td><td>8/9k (0%)</td><td>8 records</td></tr>
+  <tr><td>Favorite_Sports_Teams__c</td><td>Favorite Sports Teams</td><td>24/9k (0%)</td><td>On an Opportunity? This seems like Contact data</td></tr>
+  <tr><td>Driver__c</td><td>Driver</td><td>27/9k (0%)</td><td>Unclear what "Driver" means in this context</td></tr>
+  <tr><td>Vineyard_Name__c</td><td>Vineyard Name</td><td>11/9k (0%)</td><td>Very sparse</td></tr>
+  <tr><td>Installment_Payments__c</td><td>Installment Payments</td><td>24/9k (0%)</td><td>Sparse</td></tr>
+</table>
+
+<h3>Questionable Fields</h3>
+<table>
+  <tr><th>Field</th><th>Label</th><th>Usage</th><th>Question</th></tr>
+  <tr><td>Phone__c</td><td>Phone</td><td>5,239 (56%)</td><td><span class="tag-dup">DUPLICATE</span> Phone is on Contact already &mdash; why also on Opportunity?</td></tr>
+  <tr><td>Email__c</td><td>Email</td><td>9,251 (99%)</td><td><span class="tag-dup">DUPLICATE</span> Email is on Contact &mdash; why duplicated here?</td></tr>
+  <tr><td>Point_of_Contact__c</td><td>Point of Contact</td><td>6,972 (75%)</td><td>Is this the same as the Contact lookup? Seems redundant</td></tr>
+  <tr><td>PoC__c</td><td>PoC</td><td>9,248 (99%)</td><td>Appears to duplicate Point_of_Contact__c &mdash; two fields for the same thing?</td></tr>
+  <tr><td>Historical_Opportunity/Account/Contact_Id__c</td><td>Historical IDs (3 fields)</td><td>50-74%</td><td>Data migration artifacts &mdash; still needed?</td></tr>
+  <tr><td>Update__c</td><td>Update</td><td>7,120 (76%)</td><td>Boolean called "Update" &mdash; what does this mean?</td></tr>
+  <tr><td>Created__c</td><td>Created</td><td>9,321 (100%)</td><td>Boolean on every record &mdash; what purpose does this serve?</td></tr>
+</table>
+
+<!-- ==================== LEAD ==================== -->
+<h2 id="lead"><span class="section-num">5</span> Lead (11,918 records)</h2>
+
+<h3>Completely Unused Fields (0%)</h3>
+<table>
+  <tr><th>Field</th><th>Label</th><th>Usage</th><th>Assessment</th></tr>
+  <tr><td>Instagram_Account__c</td><td>Instagram Account</td><td><span class="tag-dead">0%</span></td><td>Never used &mdash; delete</td></tr>
+  <tr><td>File_Links__c</td><td>File Links</td><td><span class="tag-dead">0%</span></td><td>Never used &mdash; delete</td></tr>
+  <tr><td>Follow_up__c</td><td>Follow up</td><td><span class="tag-dead">0%</span></td><td>Never used on Lead</td></tr>
+  <tr><td>Is_Was_Guest__c</td><td>Is/Was Guest?</td><td><span class="tag-dead">0%</span></td><td>Never used on Lead (19% on Contact)</td></tr>
+  <tr><td>pi__grade__c</td><td>AE Grade</td><td><span class="tag-dead">0%</span></td><td>Pardot grading not configured</td></tr>
+  <tr><td>pi__Needs_Score_Synced__c</td><td>Needs Score Synced</td><td><span class="tag-dead">0%</span></td><td>Pardot internal</td></tr>
+  <tr><td>pi__utm_campaign/content/medium/source/term__c</td><td>Google Analytics fields (5)</td><td><span class="tag-dead">0%</span></td><td>UTM tracking never configured</td></tr>
+  <tr><td>Subscribe_to_Newsletter__c</td><td>Newsletter Subscriber</td><td>1/12k (0%)</td><td>1 record &mdash; effectively dead</td></tr>
+  <tr><td>Disqualified_Reason__c</td><td>Disqualified Reason</td><td>1/12k (0%)</td><td>1 record</td></tr>
+</table>
+
+<h3>Low Usage Highlights</h3>
+<table>
+  <tr><th>Field</th><th>Label</th><th>Usage</th><th>Assessment</th></tr>
+  <tr><td>Hometown__c</td><td>Hometown</td><td>56/12k (0%)</td><td>Very sparse &mdash; address fields exist already</td></tr>
+  <tr><td>Language_Text__c</td><td>Language Text</td><td>55/12k (0%)</td><td>Primary_Language__c picklist exists at 100% &mdash; this is redundant</td></tr>
+  <tr><td>Title</td><td>Title</td><td>8/12k (0%)</td><td>Standard field, barely used</td></tr>
+  <tr><td>Website</td><td>Website</td><td>6/12k (0%)</td><td>Standard field, barely used</td></tr>
+  <tr><td>Industry</td><td>Industry</td><td>14/12k (0%)</td><td>Standard B2B field &mdash; not relevant for hospitality guests</td></tr>
+  <tr><td>Rating</td><td>Rating</td><td>6/12k (0%)</td><td>Standard field, barely used</td></tr>
+  <tr><td>Clicked_on__c</td><td>Clicked on</td><td>1/12k (0%)</td><td>1 record &mdash; Contact version has 1,521 records (2%)</td></tr>
+</table>
+
+<!-- ==================== CROSS-OBJECT ==================== -->
+<h2 id="cross"><span class="section-num">6</span> Cross-Object Duplication</h2>
+
+<div class="callout callout-orange">
+  Several fields exist on multiple objects, creating data inconsistency risks. When the same data lives in two places, it inevitably drifts out of sync.
+</div>
+
+<table>
+  <tr><th>Field Concept</th><th>Contact</th><th>TVRS_Guest__c</th><th>Opportunity</th><th>Lead</th><th>Recommendation</th></tr>
+  <tr>
+    <td><strong>Email</strong></td>
+    <td>Email (99%)</td>
+    <td>Email__c (79%)</td>
+    <td>Email__c (99%)</td>
+    <td>Email (100%)</td>
+    <td>Keep on Contact &amp; Lead (standard). Remove from Opp. Keep on Guest as external ID only.</td>
+  </tr>
+  <tr>
+    <td><strong>Phone</strong></td>
+    <td>Phone (23%)</td>
+    <td>Telephone__c (67%)</td>
+    <td>Phone__c (56%)</td>
+    <td>Phone (9%)</td>
+    <td>Keep on Contact &amp; Lead. Remove from Guest and Opp.</td>
+  </tr>
+  <tr>
+    <td><strong>Check-in/out dates</strong></td>
+    <td>Check_in_date_C__c (18%)<br>Check_out_Date_C__c (17%)</td>
+    <td>Check_In_Date__c (93%)<br>Check_Out_Date__c (73%)</td>
+    <td>&mdash;</td>
+    <td>Check_in_Date__c (8%)<br>Check_Out__c (8%)</td>
+    <td>Keep on TVRS_Guest__c only. Remove from Contact. Evaluate Lead usage.</td>
+  </tr>
+  <tr>
+    <td><strong>Country</strong></td>
+    <td>Country__c (65%)</td>
+    <td>Country__c (78%)</td>
+    <td>&mdash;</td>
+    <td>Country__c (88%)</td>
+    <td>Keep on Contact &amp; Lead. Remove from Guest (use Contact lookup).</td>
+  </tr>
+  <tr>
+    <td><strong>In Conversation</strong></td>
+    <td>In_Conversation__c (0%)</td>
+    <td>In_Conversation__c (0%)</td>
+    <td>&mdash;</td>
+    <td>&mdash;</td>
+    <td>Keep on Contact only. Remove from Guest (0% there anyway).</td>
+  </tr>
+  <tr>
+    <td><strong>Ready for Pardot</strong></td>
+    <td>Ready_for_pardot_email_list__c (73%)</td>
+    <td>Ready_for_pardot_email_list__c (13%)</td>
+    <td>&mdash;</td>
+    <td>&mdash;</td>
+    <td>Keep on Contact only (73%). Remove from Guest.</td>
+  </tr>
+  <tr>
+    <td><strong>Replied to Mkt 2025</strong></td>
+    <td>Replied_to_MKT_Campaign_2025__c (0%)</td>
+    <td>Replied_to_Mkt_campaign_2025__c (0%)</td>
+    <td>&mdash;</td>
+    <td>&mdash;</td>
+    <td>Exists on both, barely used on either. Year-specific &mdash; needs a plan for 2026.</td>
+  </tr>
+  <tr>
+    <td><strong>Preferred Contact Method/Time</strong></td>
+    <td>Preferred_Contact_Method__c (0%)<br>Preferred__c (0%)<br>Preferred_Contact_Time__c (0%)</td>
+    <td>Preferred_Contact_Method__c (0%)<br>Preferred_Time_and_Day__c (0%)</td>
+    <td>&mdash;</td>
+    <td>Preferred_Contact_Method__c (0%)<br>Preferred__c (0%)<br>Preferred_Contact_Time__c (1%)</td>
+    <td>Exists on 3 objects, barely used on any. Consolidate to Contact only or delete.</td>
+  </tr>
+</table>
+
+<!-- ==================== RECOMMENDATIONS ==================== -->
+<h2 id="recs"><span class="section-num">7</span> Recommendations Summary</h2>
+
+<div class="callout callout-red">
+  <strong>High Priority &mdash; Remove / Uninstall</strong>
+  <ul>
+    <li><strong>Uninstall SigParser package</strong> &mdash; ~70 fields across Contact and Lead, all 0% usage</li>
+    <li><strong>Remove Google Analytics UTM fields</strong> (5 per object) &mdash; all 0%, never configured</li>
+    <li><strong>Delete check-in/out dates from Contact</strong> (Check_in_date_C__c, Check_out_Date_C__c) &mdash; these belong on TVRS_Guest__c only</li>
+    <li><strong>Delete TVRS_Guest__c lookup from Opportunity</strong> &mdash; 0%, never used</li>
+    <li><strong>Delete TVRS_Guest__c lookup from Contact</strong> &mdash; 0%, relationship goes the other direction</li>
+  </ul>
+</div>
+
+<div class="callout callout-orange">
+  <strong>Medium Priority &mdash; Consolidate Duplicates</strong>
+  <ul>
+    <li><strong>Remove person data from TVRS_Guest__c</strong> (name, phone, city, state, country) &mdash; accessible via Contact__c lookup</li>
+    <li><strong>Remove Email__c and Phone__c from Opportunity</strong> &mdash; accessible via Contact/Account relationships</li>
+    <li><strong>Consolidate PoC__c vs Point_of_Contact__c on Opportunity</strong> &mdash; appears to be the same data in two fields</li>
+    <li><strong>Move person-level booleans off TVRS_Guest__c</strong> (In_Conversation, Not_interested, Ready_for_pardot, Follow_up, Ready_for_PV_mail) &mdash; keep on Contact only</li>
+    <li><strong>Evaluate Historical_*_Id__c fields on Opportunity</strong> &mdash; if data migration is long done, these can go</li>
+  </ul>
+</div>
+
+<div class="callout callout-green">
+  <strong>Low Priority &mdash; Clean Up When Convenient</strong>
+  <ul>
+    <li>Clarify or delete ambiguous fields: Selected_1__c, Check__c, Update__c, Created__c, X7F__c, Driver__c</li>
+    <li>Delete confirmed dead fields: Room__c, Comply_Tasting_Date__c, Travel_for_wine__c, CUIT__c, Interested_in_Kosher__c, Investment_Date__c</li>
+    <li>Resolve Replied_to_Mkt_campaign_2025__c &mdash; make it year-agnostic or replace for 2026</li>
+    <li>Consider whether Favorite_Sports_Teams__c belongs on Opportunity or Contact</li>
+    <li>Review Language_Text__c on Lead (redundant with Primary_Language__c picklist at 100%)</li>
+  </ul>
+</div>
+
+<div class="footer">
+  <p>This audit was generated by querying live Salesforce data via the OPERA sync API credentials. Field usage percentages are based on non-null (or true, for booleans) values across all records in each object.</p>
+  <p>Textarea fields that can't be filtered in SOQL (Comments, Notes, etc.) could not be checked for usage &mdash; these need manual review.</p>
+  <p style="margin-top: 15px;">Let me know which items you'd like to move forward with and I can put together an implementation plan.</p>
+</div>
+
+</body>
+</html>
