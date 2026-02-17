@@ -132,13 +132,22 @@ async function queryGuestsSince(oracleClient, sinceTimestamp) {
   let nameIds;
 
   if (sinceTimestamp) {
+    // Find guests with email OR reservation changes since last sync
     const rows = await oracleClient.query(`
-      SELECT DISTINCT NAME_ID FROM OPERA.NAME_PHONE
-      WHERE PHONE_ROLE = 'EMAIL'
-        AND (INSERT_DATE >= :since OR UPDATE_DATE >= :since)
+      SELECT DISTINCT NAME_ID FROM (
+        -- Email changes (new guests or email updates)
+        SELECT NAME_ID FROM OPERA.NAME_PHONE
+        WHERE PHONE_ROLE = 'EMAIL'
+          AND (INSERT_DATE >= :since OR UPDATE_DATE >= :since)
+        UNION
+        -- Reservation changes (check-ins, check-outs, status updates)
+        SELECT NAME_ID FROM OPERA.RESERVATION_NAME
+        WHERE RESORT = 'VINES'
+          AND (INSERT_DATE >= :since OR UPDATE_DATE >= :since)
+      )
     `, { since: new Date(sinceTimestamp) });
     nameIds = rows.map(r => r.NAME_ID);
-    logger.info(`Found ${nameIds.length} guests modified since ${sinceTimestamp}`);
+    logger.info(`Found ${nameIds.length} guests with email or reservation changes since ${sinceTimestamp}`);
   } else {
     // Initial sync: get all guests with emails at VINES resort (last 2 years to reduce RAM usage)
     const initialSyncMonths = parseInt(process.env.INITIAL_SYNC_MONTHS) || 24;
