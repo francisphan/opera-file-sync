@@ -534,6 +534,13 @@ No action required - the system is operating normally.
 
     const totalSkipped = (stats.skippedAgents || 0) + (stats.skippedDuplicates || 0) + (stats.skippedInvalid || 0);
 
+    const agentDetails = stats.skippedAgentDetails || [];
+    const invalidDetails = stats.skippedInvalidDetails || [];
+    const duplicateDetails = stats.skippedDuplicateDetails || [];
+
+    const formatDetailList = (items) =>
+      items.map(r => `  - ${r.firstName} ${r.lastName} <${r.email}>${r.category ? ` (${r.category})` : r.reason ? ` (${r.reason})` : ''}`).join('\n');
+
     const textBody = `
 OPERA to Salesforce Sync - Daily Summary
 ========================================
@@ -547,6 +554,9 @@ Skipped (Duplicates): ${stats.skippedDuplicates || 0}
 Skipped (Invalid/No Email): ${stats.skippedInvalid || 0}
 Errors: ${stats.errors || 0}
 
+${agentDetails.length > 0 ? `\nSKIPPED - AGENTS/COMPANIES (please review):\n${formatDetailList(agentDetails)}` : ''}
+${duplicateDetails.length > 0 ? `\nSKIPPED - DUPLICATES (please review):\n${formatDetailList(duplicateDetails)}` : ''}
+${invalidDetails.length > 0 ? `\nSKIPPED - INVALID/NO EMAIL (please review):\n${formatDetailList(invalidDetails)}` : ''}
 ${stats.errors > 0 ? `\nRECENT ERRORS:\n${(stats.errorDetails || []).map(e => `- [${new Date(e.time).toLocaleTimeString()}] ${e.message}`).join('\n')}` : ''}
 
 ${stats.totalFiles ? `\nALL-TIME STATISTICS:\nTotal Files: ${stats.totalFiles}\nSuccessful: ${stats.totalSuccess}\nFailed: ${stats.totalFailed}` : ''}
@@ -581,6 +591,63 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
           <td style="padding: 8px; border: 1px solid #ddd; ${stats.errors > 0 ? 'color: red; font-weight: bold;' : ''}">${stats.errors || 0}</td>
         </tr>
       </table>
+
+      ${agentDetails.length > 0 ? `
+        <h3>⚠️ Skipped — Agents/Companies (please review)</h3>
+        <table style="border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 16px;">
+          <tr style="background: #fff3e0;">
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Name</th>
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Email</th>
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Reason</th>
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Opera ID</th>
+          </tr>
+          ${agentDetails.map(r => `
+          <tr>
+            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.firstName} ${r.lastName}</td>
+            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.email}</td>
+            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.category || ''}</td>
+            <td style="padding: 6px 10px; border: 1px solid #ddd; color: #999;">${r.operaId || ''}</td>
+          </tr>`).join('')}
+        </table>
+      ` : ''}
+
+      ${duplicateDetails.length > 0 ? `
+        <h3>⚠️ Skipped — Duplicates (please review)</h3>
+        <table style="border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 16px;">
+          <tr style="background: #fff3e0;">
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Name</th>
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Email</th>
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Reason</th>
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Opera ID</th>
+          </tr>
+          ${duplicateDetails.map(r => `
+          <tr>
+            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.firstName} ${r.lastName}</td>
+            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.email}</td>
+            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.reason || r.category || ''}</td>
+            <td style="padding: 6px 10px; border: 1px solid #ddd; color: #999;">${r.operaId || ''}</td>
+          </tr>`).join('')}
+        </table>
+      ` : ''}
+
+      ${invalidDetails.length > 0 ? `
+        <h3>⚠️ Skipped — Invalid/No Email (please review)</h3>
+        <table style="border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 16px;">
+          <tr style="background: #fff3e0;">
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Name</th>
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Email (raw)</th>
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Reason</th>
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Opera ID</th>
+          </tr>
+          ${invalidDetails.map(r => `
+          <tr>
+            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.firstName} ${r.lastName}</td>
+            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.email}</td>
+            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.reason || ''}</td>
+            <td style="padding: 6px 10px; border: 1px solid #ddd; color: #999;">${r.operaId || ''}</td>
+          </tr>`).join('')}
+        </table>
+      ` : ''}
 
       ${stats.errors > 0 ? `
         <h3>⚠️ Recent Errors</h3>

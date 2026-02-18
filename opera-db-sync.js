@@ -134,11 +134,11 @@ async function poll() {
 
     if (filtered.length > 0) {
       await notifier.notifyFilteredAgents('db-poll', filtered);
-      dailyStats.addSkipped('agent', filtered.length);
+      dailyStats.addSkipped('agent', filtered.length, filtered);
     }
 
     if (invalid.length > 0) {
-      dailyStats.addSkipped('invalid', invalid.length);
+      dailyStats.addSkipped('invalid', invalid.length, invalid);
     }
 
     if (records.length === 0) {

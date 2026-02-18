@@ -268,6 +268,7 @@ async function processFile(filePath) {
     // Parse file based on format
     let records;
     let filtered;
+    let invalid;
     let isOperaFormat = false;
 
     // Check if this is an OPERA customers file
@@ -286,6 +287,7 @@ async function processFile(filePath) {
       const result = await parseOPERAFiles(filePath, invoicesFile);
       records = result.records;
       filtered = result.filtered;
+      invalid = result.invalid;
       isOperaFormat = true;
     } else if (filename.match(/invoices\d{8}\.csv$/i)) {
       logger.info('Detected OPERA invoices CSV format');
@@ -303,6 +305,7 @@ async function processFile(filePath) {
       const result = await parseOPERAFiles(customersFile, filePath);
       records = result.records;
       filtered = result.filtered;
+      invalid = result.invalid;
       isOperaFormat = true;
     } else if (isCSV(filePath)) {
       logger.info('Detected generic CSV format');
@@ -317,7 +320,11 @@ async function processFile(filePath) {
     // Send notification for filtered agent emails
     if (filtered && filtered.length > 0) {
       await notifier.notifyFilteredAgents(filename, filtered);
-      dailyStats.addSkipped('agent', filtered.length);
+      dailyStats.addSkipped('agent', filtered.length, filtered);
+    }
+
+    if (invalid && invalid.length > 0) {
+      dailyStats.addSkipped('invalid', invalid.length, invalid);
     }
 
     if (!records || records.length === 0) {

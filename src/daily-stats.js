@@ -21,7 +21,10 @@ class DailyStats {
       skippedDuplicates: 0,
       skippedInvalid: 0,
       errors: 0,
-      errorDetails: []
+      errorDetails: [],
+      skippedAgentDetails: [],
+      skippedInvalidDetails: [],
+      skippedDuplicateDetails: []
     };
     this.load();
   }
@@ -62,19 +65,23 @@ class DailyStats {
   }
 
   /**
-   * Add skipped records count
+   * Add skipped records count and details
    * @param {string} category - Skip category: 'agent', 'company', 'duplicate', 'invalid'
    * @param {number} count - Number of records skipped
+   * @param {Array} [details] - Array of skipped record objects for human review
    */
-  addSkipped(category, count) {
+  addSkipped(category, count, details = []) {
     this.checkDateRollover();
 
     if (category === 'agent' || category === 'company' || category === 'agent-domain' || category === 'booking-proxy' || category === 'expedia-proxy') {
       this.stats.skippedAgents += count;
+      this.stats.skippedAgentDetails.push(...details);
     } else if (category === 'duplicate' || category === 'duplicate-detected') {
       this.stats.skippedDuplicates += count;
+      this.stats.skippedDuplicateDetails.push(...details);
     } else if (category === 'invalid' || category === 'no-email') {
       this.stats.skippedInvalid += count;
+      this.stats.skippedInvalidDetails.push(...details);
     }
 
     this.save();
@@ -125,7 +132,10 @@ class DailyStats {
       skippedDuplicates: 0,
       skippedInvalid: 0,
       errors: 0,
-      errorDetails: []
+      errorDetails: [],
+      skippedAgentDetails: [],
+      skippedInvalidDetails: [],
+      skippedDuplicateDetails: []
     };
     this.save();
     logger.info('Daily statistics reset');

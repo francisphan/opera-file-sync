@@ -140,10 +140,18 @@ async function parseOPERAFiles(customersFile, invoicesFile = null) {
   // Join customers with invoices and transform, filtering out agent emails
   const records = [];
   const filtered = [];
+  const invalid = [];
   for (const [operaId, customer] of customers) {
     // Skip records without email (required for upsert)
     if (!customer.email || !customer.email.includes('@')) {
       logger.debug(`Skipping customer ${operaId} - no valid email`);
+      invalid.push({
+        email: customer.email || '',
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+        operaId: customer.operaId,
+        reason: 'invalid-email'
+      });
       continue;
     }
 
@@ -167,8 +175,11 @@ async function parseOPERAFiles(customersFile, invoicesFile = null) {
   if (filtered.length > 0) {
     logger.info(`Filtered ${filtered.length} agent/company emails`);
   }
+  if (invalid.length > 0) {
+    logger.info(`Skipped ${invalid.length} guests with invalid/missing emails`);
+  }
   logger.info(`Transformed ${records.length} guest records for Salesforce`);
-  return { records, filtered };
+  return { records, filtered, invalid };
 }
 
 /**

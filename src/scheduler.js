@@ -58,8 +58,11 @@ function setupDailySummary(notifier, dailyStats, fileTracker = null) {
           date: stats.date,
           recordsSynced: stats.uploaded,
           skippedAgents: stats.skippedAgents,
+          skippedAgentDetails: stats.skippedAgentDetails || [],
           skippedDuplicates: stats.skippedDuplicates,
+          skippedDuplicateDetails: stats.skippedDuplicateDetails || [],
           skippedInvalid: stats.skippedInvalid,
+          skippedInvalidDetails: stats.skippedInvalidDetails || [],
           errors: stats.errors,
           errorDetails: stats.errorDetails.slice(0, 10) // First 10 errors
         };
@@ -114,8 +117,11 @@ async function triggerDailySummary(notifier, dailyStats, fileTracker = null) {
     date: stats.date,
     recordsSynced: stats.uploaded,
     skippedAgents: stats.skippedAgents,
+    skippedAgentDetails: stats.skippedAgentDetails || [],
     skippedDuplicates: stats.skippedDuplicates,
+    skippedDuplicateDetails: stats.skippedDuplicateDetails || [],
     skippedInvalid: stats.skippedInvalid,
+    skippedInvalidDetails: stats.skippedInvalidDetails || [],
     errors: stats.errors,
     errorDetails: stats.errorDetails.slice(0, 10)
   };
