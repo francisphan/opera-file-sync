@@ -158,14 +158,14 @@ class SalesforceClient {
 
     if (!guestDataList || guestDataList.length === 0) {
       logger.warn('No guest data to sync');
-      return { contacts: { created: 0, updated: 0, failed: 0 }, guests: { created: 0, updated: 0, failed: 0 }, errors: [] };
+      return { contacts: { created: 0, updated: 0, failed: 0, skippedConflicts: 0 }, guests: { created: 0, updated: 0, failed: 0 }, errors: [] };
     }
 
     const batchSize = parseInt(process.env.BATCH_SIZE) || 200;
     const guestObject = process.env.SF_OBJECT || 'TVRS_Guest__c';
     const contactLookup = process.env.SF_GUEST_CONTACT_LOOKUP || 'Contact__c';
     const results = {
-      contacts: { created: 0, updated: 0, failed: 0 },
+      contacts: { created: 0, updated: 0, failed: 0, skippedConflicts: 0 },
       guests: { created: 0, updated: 0, failed: 0 },
       errors: []
     };
@@ -173,11 +173,37 @@ class SalesforceClient {
     // --- Phase 1: Upsert Contacts ---
     logger.info(`Phase 1: Upserting ${guestDataList.length} Contacts...`);
 
-    // Deduplicate by email (take latest entry per email)
+    // Group entries by email to detect name conflicts before deduplication
+    const emailGroups = new Map(); // email → [{customer, invoice}, ...]
+    for (const entry of guestDataList) {
+      const email = (entry.customer.email || '').toLowerCase();
+      if (!email) continue;
+      if (!emailGroups.has(email)) emailGroups.set(email, []);
+      emailGroups.get(email).push(entry);
+    }
+
+    // Identify emails with multiple distinct names (case-insensitive firstName+lastName)
+    const conflictedEmails = new Set();
+    for (const [email, entries] of emailGroups) {
+      if (entries.length > 1) {
+        const names = new Set(
+          entries.map(e =>
+            `${(e.customer.firstName || '').toLowerCase()}|${(e.customer.lastName || '').toLowerCase()}`
+          )
+        );
+        if (names.size > 1) {
+          conflictedEmails.add(email);
+          const nameList = [...names].join(', ');
+          logger.warn(`Email conflict: "${email}" is shared by ${names.size} distinct names (${nameList})`);
+        }
+      }
+    }
+
+    // Build deduplicated map: first occurrence wins for each email
     const byEmail = new Map();
     for (const entry of guestDataList) {
       const email = (entry.customer.email || '').toLowerCase();
-      if (email) byEmail.set(email, entry);
+      if (email && !byEmail.has(email)) byEmail.set(email, entry);
     }
     const uniqueEmails = [...byEmail.keys()];
 
@@ -210,11 +236,23 @@ class SalesforceClient {
       const contactData = transformToContact(entry.customer);
       const existingId = emailToContactId.get(email);
 
-      if (existingId) {
-        contactData.Id = existingId;
-        contactsToUpdate.push(contactData);
+      if (conflictedEmails.has(email)) {
+        if (existingId) {
+          // Existing Contact: skip update to avoid overwriting name with a different person's data
+          results.contacts.skippedConflicts++;
+          logger.warn(`Skipping Contact update for "${email}" (conflicted email, existing Contact ${existingId} preserved)`);
+        } else {
+          // New Contact: create using first occurrence
+          contactsToInsert.push(contactData);
+          logger.warn(`Creating new Contact for conflicted email "${email}" using first occurrence`);
+        }
       } else {
-        contactsToInsert.push(contactData);
+        if (existingId) {
+          contactData.Id = existingId;
+          contactsToUpdate.push(contactData);
+        } else {
+          contactsToInsert.push(contactData);
+        }
       }
       emailToEntry.set(email, entry);
     }
@@ -266,7 +304,7 @@ class SalesforceClient {
       }
     }
 
-    logger.info(`Phase 1 complete: ${results.contacts.created} created, ${results.contacts.updated} updated, ${results.contacts.failed} failed`);
+    logger.info(`Phase 1 complete: ${results.contacts.created} created, ${results.contacts.updated} updated, ${results.contacts.failed} failed, ${results.contacts.skippedConflicts} skipped (email conflicts)`);
 
     // --- Phase 2: Upsert TVRS_Guest__c records ---
     logger.info(`Phase 2: Upserting TVRS_Guest__c records...`);
@@ -303,10 +341,15 @@ class SalesforceClient {
     logger.info(`Found ${existingGuestMap.size} existing TVRS_Guest__c records for matched Contacts`);
 
     // Build TVRS_Guest__c records, split into creates vs updates
+    // Iterate full guestDataList (not byEmail) so every original OPERA entry gets its own check-in record
     const guestsToCreate = [];
     const guestsToUpdate = [];
+    const seenGuestKeys = new Set();
 
-    for (const [email, entry] of byEmail) {
+    for (const entry of guestDataList) {
+      const email = (entry.customer.email || '').toLowerCase();
+      if (!email) continue;
+
       const contactId = emailToContactId.get(email);
       if (!contactId) {
         // Contact failed to create — skip guest record
@@ -316,6 +359,11 @@ class SalesforceClient {
       const guestRecord = transformToTVRSGuest(entry.customer, entry.invoice, contactId);
       const checkInDate = guestRecord.Check_In_Date__c || null;
       const matchKey = checkInDate ? `${contactId}|${checkInDate}` : null;
+
+      // Skip if we have already queued this Contact+CheckInDate combination
+      if (matchKey && seenGuestKeys.has(matchKey)) continue;
+      if (matchKey) seenGuestKeys.add(matchKey);
+
       const existingId = matchKey ? existingGuestMap.get(matchKey) : null;
 
       if (existingId) {
