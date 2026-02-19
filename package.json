@@ -12,6 +12,10 @@
     "test": "node test-connection.js",
     "test:oracle": "node test-oracle-connection.js",
     "test:notifications": "node test-notifications.js",
+    "dry-run": "node scripts/dry-run.js",
+    "dry-run:verbose": "node scripts/dry-run.js --verbose",
+    "report:duplicates": "node scripts/duplicate-report.js",
+    "report:duplicates:send": "node scripts/duplicate-report.js --send",
     "build:bundle": "ncc build opera-file-sync.js -o dist",
     "build:exe": "pkg opera-file-sync.js --targets node18-win-x64 --output dist/opera-sync-file.exe",
     "build:exe:db": "pkg opera-db-sync.js --targets node18-win-x64 --output dist/opera-sync-db.exe",
@@ -39,7 +43,8 @@
     "chokidar": "^3.6.0",
     "csv-parser": "^3.0.0",
     "dotenv": "^16.4.5",
-    "fast-xml-parser": "^4.3.5",
+    "fast-xml-parser": "^5.3.6",
+    "googleapis": "^171.4.0",
     "jsforce": "^3.10.14",
     "node-schedule": "^2.1.1",
     "nodemailer": "^8.0.1",
@@ -48,9 +53,8 @@
   },
   "devDependencies": {
     "@vercel/ncc": "^0.38.1",
+    "@yao-pkg/pkg": "^6.14.0",
     "express": "^4.18.2",
-    "googleapis": "^171.4.0",
-    "open": "^8.4.0",
-    "pkg": "^5.8.1"
+    "open": "^8.4.0"
   }
 }
