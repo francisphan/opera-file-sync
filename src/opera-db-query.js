@@ -71,7 +71,9 @@ async function queryGuestsByIds(oracleClient, nameIds) {
         SELECT NAME_ID, BEGIN_DATE AS CHECK_IN, END_DATE AS CHECK_OUT,
                ROW_NUMBER() OVER (PARTITION BY NAME_ID ORDER BY BEGIN_DATE DESC) AS rn
         FROM OPERA.RESERVATION_NAME
-        WHERE RESORT = 'VINES' AND RESV_STATUS IN ('RESERVED','CHECKED IN','CHECKED OUT')
+        WHERE RESORT = 'VINES'
+          AND RESV_STATUS IN ('RESERVED','CHECKED IN','CHECKED OUT')
+          AND BEGIN_DATE <= TRUNC(SYSDATE) + 7
       ) rn ON n.NAME_ID = rn.NAME_ID AND rn.rn = 1
       WHERE n.NAME_ID IN (${placeholders.join(',')})
     `, binds);
@@ -122,6 +124,18 @@ async function queryGuestsByIds(oracleClient, nameIds) {
         checkOut: formatDate(row.CHECK_OUT)
       } : null;
 
+      if (!invoice) {
+        // Guest was found (e.g. email change) but has no past or current check-in
+        filtered.push({
+          email: customer.email,
+          firstName: customer.firstName,
+          lastName: customer.lastName,
+          operaId: customer.operaId,
+          category: 'future-reservation-only'
+        });
+        continue;
+      }
+
       records.push({ customer, invoice });
     }
   }
@@ -159,6 +173,13 @@ async function queryGuestsSince(oracleClient, sinceTimestamp) {
         SELECT NAME_ID FROM OPERA.RESERVATION_NAME
         WHERE RESORT = 'VINES'
           AND (INSERT_DATE >= :since OR UPDATE_DATE >= :since)
+        UNION
+        -- Guests checking in within the next 7 days: may have been booked before
+        -- last sync with no recent UPDATE_DATE, but their check-in window is now open
+        SELECT NAME_ID FROM OPERA.RESERVATION_NAME
+        WHERE RESORT = 'VINES'
+          AND RESV_STATUS IN ('RESERVED','CHECKED IN','CHECKED OUT')
+          AND TRUNC(BEGIN_DATE) BETWEEN TRUNC(SYSDATE) AND TRUNC(SYSDATE) + 7
       )
     `, { since: new Date(sinceTimestamp) });
     nameIds = rows.map(r => r.NAME_ID);
