@@ -149,32 +149,42 @@ class SalesforceClient {
   }
 
   /**
-   * Two-phase sync: upsert Contacts by email, then upsert TVRS_Guest__c by Contact+CheckInDate
+   * Two-phase sync: create Contacts (new only, never update existing), then upsert TVRS_Guest__c
    * @param {Array} guestDataList - Array of {customer, invoice} objects (raw, not yet transformed)
-   * @returns {Object} Combined results {contacts: {created, updated, failed}, guests: {created, updated, failed}, errors: []}
+   * @returns {Object} Results with contacts/guests counters, needsReview array, and flat success/failed aliases
    */
   async syncGuestCheckIns(guestDataList) {
     await this.ensureConnected();
 
     if (!guestDataList || guestDataList.length === 0) {
       logger.warn('No guest data to sync');
-      return { contacts: { created: 0, updated: 0, failed: 0, skippedConflicts: 0 }, guests: { created: 0, updated: 0, failed: 0 }, errors: [] };
+      return { contacts: { created: 0, failed: 0 }, guests: { created: 0, updated: 0, failed: 0 }, needsReview: [], errors: [], success: 0, failed: 0 };
     }
 
     const batchSize = parseInt(process.env.BATCH_SIZE) || 200;
     const guestObject = process.env.SF_OBJECT || 'TVRS_Guest__c';
     const contactLookup = process.env.SF_GUEST_CONTACT_LOOKUP || 'Contact__c';
     const results = {
-      contacts: { created: 0, updated: 0, failed: 0, skippedConflicts: 0 },
+      contacts: { created: 0, failed: 0 },
       guests: { created: 0, updated: 0, failed: 0 },
-      errors: []
+      needsReview: [],
+      errors: [] // kept for backwards compat (callers read errors[0]?.error)
     };
 
-    // --- Phase 1: Upsert Contacts ---
-    logger.info(`Phase 1: Upserting ${guestDataList.length} Contacts...`);
+    function flagNeedsReview(entry, reason, details) {
+      results.needsReview.push({
+        email: (entry.customer.email || '').toLowerCase(),
+        firstName: entry.customer.firstName || '',
+        lastName: entry.customer.lastName || '',
+        checkInDate: (entry.invoice && entry.invoice.checkIn) || null,
+        reason,
+        ...(details ? { details } : {})
+      });
+    }
 
-    // Group entries by email to detect name conflicts before deduplication
-    const emailGroups = new Map(); // email → [{customer, invoice}, ...]
+    // --- Pre-flight: within-batch conflict detection ---
+    // Group entries by email; if same email has 2+ distinct names → flag all and exclude
+    const emailGroups = new Map();
     for (const entry of guestDataList) {
       const email = (entry.customer.email || '').toLowerCase();
       if (!email) continue;
@@ -182,137 +192,136 @@ class SalesforceClient {
       emailGroups.get(email).push(entry);
     }
 
-    // Identify emails with multiple distinct names (case-insensitive firstName+lastName)
-    const conflictedEmails = new Set();
+    const batchConflictEmails = new Set();
     for (const [email, entries] of emailGroups) {
-      if (entries.length > 1) {
-        const names = new Set(
-          entries.map(e =>
-            `${(e.customer.firstName || '').toLowerCase()}|${(e.customer.lastName || '').toLowerCase()}`
-          )
-        );
-        if (names.size > 1) {
-          conflictedEmails.add(email);
-          const nameList = [...names].join(', ');
-          logger.warn(`Email conflict: "${email}" is shared by ${names.size} distinct names (${nameList})`);
+      if (entries.length < 2) continue;
+      const names = new Set(
+        entries.map(e =>
+          `${(e.customer.firstName || '').toLowerCase()}|${(e.customer.lastName || '').toLowerCase()}`
+        )
+      );
+      if (names.size > 1) {
+        batchConflictEmails.add(email);
+        const nameList = [...names].join(', ');
+        logger.warn(`Shared email in batch: "${email}" has ${names.size} distinct names (${nameList}) — all flagged for review`);
+        for (const entry of entries) {
+          flagNeedsReview(entry, 'shared-email-in-batch', `Names in batch: ${nameList}`);
         }
       }
     }
 
-    // Build deduplicated map: first occurrence wins for each email
-    const byEmail = new Map();
-    for (const entry of guestDataList) {
+    // Eligible entries: have an email and are not batch-conflicted
+    const eligibleEntries = guestDataList.filter(entry => {
       const email = (entry.customer.email || '').toLowerCase();
-      if (email && !byEmail.has(email)) byEmail.set(email, entry);
-    }
-    const uniqueEmails = [...byEmail.keys()];
+      return email && !batchConflictEmails.has(email);
+    });
 
-    // Query existing Contacts by email
-    const emailToContactId = new Map();
+    // Unique emails for SF lookup
+    const uniqueEmailsSet = new Set();
+    for (const entry of eligibleEntries) {
+      uniqueEmailsSet.add((entry.customer.email || '').toLowerCase());
+    }
+    const uniqueEmails = [...uniqueEmailsSet];
+
+    // emailStatus: email → { status: 'new'|'exists'|'ambiguous', contactId? }
+    const emailStatus = new Map();
+    for (const email of uniqueEmails) {
+      emailStatus.set(email, { status: 'new' });
+    }
+
+    // --- Phase 1: Batch email lookup in Salesforce ---
+    logger.info(`Phase 1: Querying ${uniqueEmails.length} unique emails against Salesforce Contacts...`);
+
     for (let i = 0; i < uniqueEmails.length; i += batchSize) {
       const emailBatch = uniqueEmails.slice(i, i + batchSize);
       const escaped = emailBatch.map(e => `'${e.replace(/'/g, "\\'")}'`).join(',');
       const query = `SELECT Id, Email FROM Contact WHERE Email IN (${escaped})`;
 
-      try {
-        const result = await this.connection.query(query);
-        for (const rec of result.records) {
-          emailToContactId.set(rec.Email.toLowerCase(), rec.Id);
-        }
-      } catch (err) {
-        logger.error('Error querying existing Contacts:', err.message);
-        results.errors.push({ phase: 'contact-query', error: err.message });
+      // Re-throw on query failure — infra-level problem, don't continue silently
+      const result = await this.connection.query(query);
+
+      // Group by email to detect duplicates
+      const sfByEmail = new Map();
+      for (const rec of result.records) {
+        const email = rec.Email.toLowerCase();
+        if (!sfByEmail.has(email)) sfByEmail.set(email, []);
+        sfByEmail.get(email).push(rec.Id);
       }
-    }
 
-    logger.info(`Found ${emailToContactId.size} existing Contacts out of ${uniqueEmails.length} emails`);
-
-    // Split into inserts and updates
-    const contactsToInsert = [];
-    const contactsToUpdate = [];
-    const emailToEntry = new Map(); // track which entry goes with which email
-
-    for (const [email, entry] of byEmail) {
-      const contactData = transformToContact(entry.customer);
-      const existingId = emailToContactId.get(email);
-
-      if (conflictedEmails.has(email)) {
-        if (existingId) {
-          // Existing Contact: skip update to avoid overwriting name with a different person's data
-          results.contacts.skippedConflicts++;
-          logger.warn(`Skipping Contact update for "${email}" (conflicted email, existing Contact ${existingId} preserved)`);
+      for (const [email, ids] of sfByEmail) {
+        if (ids.length === 1) {
+          emailStatus.set(email, { status: 'exists', contactId: ids[0] });
         } else {
-          // New Contact: create using first occurrence
-          contactsToInsert.push(contactData);
-          logger.warn(`Creating new Contact for conflicted email "${email}" using first occurrence`);
+          emailStatus.set(email, { status: 'ambiguous' });
         }
-      } else {
-        if (existingId) {
-          contactData.Id = existingId;
-          contactsToUpdate.push(contactData);
+      }
+    }
+
+    // Flag ambiguous emails for needsReview (one entry per eligible entry with that email)
+    for (const entry of eligibleEntries) {
+      const email = (entry.customer.email || '').toLowerCase();
+      const status = emailStatus.get(email);
+      if (status && status.status === 'ambiguous') {
+        flagNeedsReview(entry, 'multiple-sf-contacts');
+      }
+    }
+
+    const newCount = [...emailStatus.values()].filter(s => s.status === 'new').length;
+    const existsCount = [...emailStatus.values()].filter(s => s.status === 'exists').length;
+    const ambiguousCount = [...emailStatus.values()].filter(s => s.status === 'ambiguous').length;
+    logger.info(`Phase 1 complete: ${newCount} new, ${existsCount} existing, ${ambiguousCount} ambiguous`);
+
+    // --- Phase 2: Create new Contacts (status: 'new' only — never update existing) ---
+    // Build lookup: email → first eligible entry (for new contact data)
+    const emailToFirstEntry = new Map();
+    for (const entry of eligibleEntries) {
+      const email = (entry.customer.email || '').toLowerCase();
+      if (!emailToFirstEntry.has(email)) emailToFirstEntry.set(email, entry);
+    }
+
+    const newEmails = [...emailStatus.entries()]
+      .filter(([, s]) => s.status === 'new')
+      .map(([email]) => email);
+
+    logger.info(`Phase 2: Creating ${newEmails.length} new Contacts...`);
+
+    for (let i = 0; i < newEmails.length; i += batchSize) {
+      const emailSlice = newEmails.slice(i, i + batchSize);
+      const records = emailSlice.map(email => transformToContact(emailToFirstEntry.get(email).customer));
+
+      // Re-throw on batch-level failure
+      const batchResults = await this.connection.sobject('Contact').create(records);
+      const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
+
+      resultsArray.forEach((res, idx) => {
+        const email = emailSlice[idx];
+        if (res.success) {
+          results.contacts.created++;
+          emailStatus.set(email, { status: 'exists', contactId: res.id });
+          logger.debug(`Contact created: ${res.id} for ${email}`);
         } else {
-          contactsToInsert.push(contactData);
+          results.contacts.failed++;
+          const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
+          logger.error(`Contact create failed for ${email}: ${errorMsg}`);
+          for (const entry of eligibleEntries) {
+            if ((entry.customer.email || '').toLowerCase() === email) {
+              flagNeedsReview(entry, 'contact-create-failed', errorMsg);
+            }
+          }
         }
-      }
-      emailToEntry.set(email, entry);
+      });
     }
 
-    // Batch insert new Contacts
-    for (let i = 0; i < contactsToInsert.length; i += batchSize) {
-      const batch = contactsToInsert.slice(i, i + batchSize);
-      try {
-        const batchResults = await this.connection.sobject('Contact').create(batch);
-        const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
-        resultsArray.forEach((res, idx) => {
-          if (res.success) {
-            results.contacts.created++;
-            emailToContactId.set(batch[idx].Email.toLowerCase(), res.id);
-          } else {
-            results.contacts.failed++;
-            const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
-            results.errors.push({ phase: 'contact-insert', email: batch[idx].Email, error: errorMsg });
-            logger.warn(`Contact insert failed for ${batch[idx].Email}: ${errorMsg}`);
-          }
-        });
-      } catch (err) {
-        logger.error('Contact insert batch failed:', err.message);
-        results.contacts.failed += batch.length;
-        results.errors.push({ phase: 'contact-insert', error: err.message });
-      }
-    }
+    logger.info(`Phase 2 complete: ${results.contacts.created} created, ${results.contacts.failed} failed`);
 
-    // Batch update existing Contacts
-    for (let i = 0; i < contactsToUpdate.length; i += batchSize) {
-      const batch = contactsToUpdate.slice(i, i + batchSize);
-      try {
-        const batchResults = await this.connection.sobject('Contact').update(batch);
-        const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
-        resultsArray.forEach((res, idx) => {
-          if (res.success) {
-            results.contacts.updated++;
-          } else {
-            results.contacts.failed++;
-            const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
-            results.errors.push({ phase: 'contact-update', email: batch[idx].Email, error: errorMsg });
-            logger.warn(`Contact update failed for ${batch[idx].Email}: ${errorMsg}`);
-          }
-        });
-      } catch (err) {
-        logger.error('Contact update batch failed:', err.message);
-        results.contacts.failed += batch.length;
-        results.errors.push({ phase: 'contact-update', error: err.message });
-      }
-    }
+    // --- Phase 3: Upsert TVRS_Guest__c ---
+    logger.info(`Phase 3: Upserting ${guestObject} records...`);
 
-    logger.info(`Phase 1 complete: ${results.contacts.created} created, ${results.contacts.updated} updated, ${results.contacts.failed} failed, ${results.contacts.skippedConflicts} skipped (email conflicts)`);
+    const successContactIds = [...emailStatus.values()]
+      .filter(s => s.status === 'exists' && s.contactId)
+      .map(s => s.contactId);
 
-    // --- Phase 2: Upsert TVRS_Guest__c records ---
-    logger.info(`Phase 2: Upserting TVRS_Guest__c records...`);
-
-    // Collect Contact IDs that succeeded
-    const successContactIds = [...emailToContactId.values()];
-
-    // Query existing TVRS_Guest__c for these Contacts
+    // Query existing TVRS_Guest__c records for resolved contacts
     const existingGuestMap = new Map(); // "contactId|checkInDate" → guestRecordId
     for (let i = 0; i < successContactIds.length; i += batchSize) {
       const idBatch = successContactIds.slice(i, i + batchSize);
@@ -328,20 +337,17 @@ class SalesforceClient {
         }
         for (const rec of allRecords) {
           if (rec[contactLookup] && rec.Check_In_Date__c) {
-            const key = `${rec[contactLookup]}|${rec.Check_In_Date__c}`;
-            existingGuestMap.set(key, rec.Id);
+            existingGuestMap.set(`${rec[contactLookup]}|${rec.Check_In_Date__c}`, rec.Id);
           }
         }
       } catch (err) {
-        logger.error('Error querying existing TVRS_Guest__c:', err.message);
-        results.errors.push({ phase: 'guest-query', error: err.message });
+        logger.error(`Error querying existing ${guestObject}:`, err.message);
       }
     }
 
-    logger.info(`Found ${existingGuestMap.size} existing TVRS_Guest__c records for matched Contacts`);
+    logger.info(`Found ${existingGuestMap.size} existing ${guestObject} records for matched Contacts`);
 
-    // Build TVRS_Guest__c records, split into creates vs updates
-    // Iterate full guestDataList (not byEmail) so every original OPERA entry gets its own check-in record
+    // Iterate full guestDataList — every Opera entry gets its own check-in record
     const guestsToCreate = [];
     const guestsToUpdate = [];
     const seenGuestKeys = new Set();
@@ -350,84 +356,75 @@ class SalesforceClient {
       const email = (entry.customer.email || '').toLowerCase();
       if (!email) continue;
 
-      const contactId = emailToContactId.get(email);
-      if (!contactId) {
-        // Contact failed to create — skip guest record
-        continue;
-      }
+      const status = emailStatus.get(email);
+      if (!status || status.status !== 'exists' || !status.contactId) continue;
 
-      const guestRecord = transformToTVRSGuest(entry.customer, entry.invoice, contactId);
+      const guestRecord = transformToTVRSGuest(entry.customer, entry.invoice, status.contactId);
       const checkInDate = guestRecord.Check_In_Date__c || null;
-      const matchKey = checkInDate ? `${contactId}|${checkInDate}` : null;
+      const matchKey = checkInDate ? `${status.contactId}|${checkInDate}` : null;
 
-      // Skip if we have already queued this Contact+CheckInDate combination
       if (matchKey && seenGuestKeys.has(matchKey)) continue;
       if (matchKey) seenGuestKeys.add(matchKey);
 
       const existingId = matchKey ? existingGuestMap.get(matchKey) : null;
-
       if (existingId) {
         guestRecord.Id = existingId;
-        guestsToUpdate.push(guestRecord);
+        guestsToUpdate.push({ record: guestRecord, entry });
       } else {
-        guestsToCreate.push(guestRecord);
+        guestsToCreate.push({ record: guestRecord, entry });
       }
     }
 
     // Batch create new TVRS_Guest__c
     for (let i = 0; i < guestsToCreate.length; i += batchSize) {
       const batch = guestsToCreate.slice(i, i + batchSize);
-      try {
-        const batchResults = await this.connection.sobject(guestObject).create(batch);
-        const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
-        resultsArray.forEach((res, idx) => {
-          if (res.success) {
-            results.guests.created++;
-            logger.debug(`TVRS_Guest__c created: ${res.id} for ${batch[idx].Email__c}`);
-          } else {
-            results.guests.failed++;
-            const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
-            results.errors.push({ phase: 'guest-create', email: batch[idx].Email__c, error: errorMsg });
-            logger.warn(`TVRS_Guest__c create failed for ${batch[idx].Email__c}: ${errorMsg}`);
-          }
-        });
-      } catch (err) {
-        logger.error('TVRS_Guest__c create batch failed:', err.message);
-        results.guests.failed += batch.length;
-        results.errors.push({ phase: 'guest-create', error: err.message });
-      }
+      const records = batch.map(g => g.record);
+
+      // Re-throw on batch-level failure
+      const batchResults = await this.connection.sobject(guestObject).create(records);
+      const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
+
+      resultsArray.forEach((res, idx) => {
+        const { record, entry } = batch[idx];
+        if (res.success) {
+          results.guests.created++;
+          logger.debug(`${guestObject} created: ${res.id} for ${record.Email__c}`);
+        } else {
+          results.guests.failed++;
+          const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
+          logger.error(`${guestObject} create failed for ${record.Email__c}: ${errorMsg}`);
+          flagNeedsReview(entry, 'guest-sync-failed', errorMsg);
+        }
+      });
     }
 
     // Batch update existing TVRS_Guest__c
     for (let i = 0; i < guestsToUpdate.length; i += batchSize) {
       const batch = guestsToUpdate.slice(i, i + batchSize);
-      try {
-        const batchResults = await this.connection.sobject(guestObject).update(batch);
-        const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
-        resultsArray.forEach((res, idx) => {
-          if (res.success) {
-            results.guests.updated++;
-            logger.debug(`TVRS_Guest__c updated: ${res.id} for ${batch[idx].Email__c}`);
-          } else {
-            results.guests.failed++;
-            const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
-            results.errors.push({ phase: 'guest-update', email: batch[idx].Email__c, error: errorMsg });
-            logger.warn(`TVRS_Guest__c update failed for ${batch[idx].Email__c}: ${errorMsg}`);
-          }
-        });
-      } catch (err) {
-        logger.error('TVRS_Guest__c update batch failed:', err.message);
-        results.guests.failed += batch.length;
-        results.errors.push({ phase: 'guest-update', error: err.message });
-      }
+      const records = batch.map(g => g.record);
+
+      // Re-throw on batch-level failure
+      const batchResults = await this.connection.sobject(guestObject).update(records);
+      const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
+
+      resultsArray.forEach((res, idx) => {
+        const { record, entry } = batch[idx];
+        if (res.success) {
+          results.guests.updated++;
+          logger.debug(`${guestObject} updated: ${res.id} for ${record.Email__c}`);
+        } else {
+          results.guests.failed++;
+          const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
+          logger.error(`${guestObject} update failed for ${record.Email__c}: ${errorMsg}`);
+          flagNeedsReview(entry, 'guest-sync-failed', errorMsg);
+        }
+      });
     }
 
-    const totalSuccess = results.contacts.created + results.contacts.updated + results.guests.created + results.guests.updated;
-    const totalFailed = results.contacts.failed + results.guests.failed;
-    logger.info(`Phase 2 complete: ${results.guests.created} created, ${results.guests.updated} updated, ${results.guests.failed} failed`);
-    logger.info(`Sync complete: ${totalSuccess} total operations succeeded, ${totalFailed} failed`);
+    logger.info(`Phase 3 complete: ${results.guests.created} created, ${results.guests.updated} updated, ${results.guests.failed} failed`);
+    logger.info(`Sync complete. needsReview: ${results.needsReview.length} items`);
 
-    // Return a flat summary for backwards compatibility with notifier/stats
+    // Flat aliases for backwards compat with callers (opera-file-sync.js, opera-db-sync.js)
     results.success = results.guests.created + results.guests.updated;
     results.failed = results.contacts.failed + results.guests.failed;
 

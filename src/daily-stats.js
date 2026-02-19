@@ -21,10 +21,12 @@ class DailyStats {
       skippedDuplicates: 0,
       skippedInvalid: 0,
       errors: 0,
+      needsReview: 0,
       errorDetails: [],
       skippedAgentDetails: [],
       skippedInvalidDetails: [],
-      skippedDuplicateDetails: []
+      skippedDuplicateDetails: [],
+      needsReviewDetails: []
     };
     this.load();
   }
@@ -112,6 +114,22 @@ class DailyStats {
   }
 
   /**
+   * Add items that need human review (e.g. shared-email-in-batch, multiple-sf-contacts)
+   * @param {number} count - Number of items
+   * @param {Array} [details] - Array of needsReview objects for the daily report
+   */
+  addNeedsReview(count, details = []) {
+    this.checkDateRollover();
+    this.stats.needsReview += count;
+    this.stats.needsReviewDetails.push(...details);
+    if (this.stats.needsReviewDetails.length > 100) {
+      this.stats.needsReviewDetails = this.stats.needsReviewDetails.slice(-100);
+    }
+    this.save();
+    logger.debug(`Daily stats: +${count} needsReview (total: ${this.stats.needsReview})`);
+  }
+
+  /**
    * Get current statistics
    * @returns {Object} Current day's statistics
    */
@@ -132,10 +150,12 @@ class DailyStats {
       skippedDuplicates: 0,
       skippedInvalid: 0,
       errors: 0,
+      needsReview: 0,
       errorDetails: [],
       skippedAgentDetails: [],
       skippedInvalidDetails: [],
-      skippedDuplicateDetails: []
+      skippedDuplicateDetails: [],
+      needsReviewDetails: []
     };
     this.save();
     logger.info('Daily statistics reset');

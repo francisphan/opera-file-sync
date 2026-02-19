@@ -129,9 +129,10 @@ function transformToContact(customer) {
     Email: customer.email,
     FirstName: customer.firstName,
     LastName: customer.lastName,
-    Phone: customer.phone || null
+    Phone: customer.phone || null,
     // Note: Contact object doesn't have standard Mailing address fields
     // Address data is stored on TVRS_Guest__c instead
+    Has_TVRS_Guest_Record__c: true
   };
 }
 
