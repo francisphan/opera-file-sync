@@ -29,6 +29,7 @@ Thumbs.db
 
 # Reports
 reports/
+scripts/output/
 
 dist/deploy/opera-sync.exe
 dist/opera-*.exe
