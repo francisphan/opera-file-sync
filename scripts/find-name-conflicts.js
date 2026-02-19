@@ -30,6 +30,7 @@ const SF_CONFIG = {
 const GUEST_OBJECT = process.env.SF_OBJECT || 'TVRS_Guest__c';
 const CONTACT_LOOKUP = process.env.SF_GUEST_CONTACT_LOOKUP || 'Contact__c';
 const BATCH_SIZE = 200;
+const RECENT_DAYS = parseInt(process.env.CONFLICT_DAYS || '7');
 
 // ---------------------------------------------------------------------------
 
@@ -70,27 +71,42 @@ async function main() {
   const identity = await conn.identity();
   console.log(`Connected as: ${identity.username}`);
 
-  // --- Step 1: Get all Contact IDs that have at least one guest record ---
-  console.log(`\nQuerying ${GUEST_OBJECT} for linked Contact IDs...`);
+  // --- Step 1: Get Contact IDs recently modified (likely by this sync project) ---
+  console.log(`\nQuerying Contacts modified in the last ${RECENT_DAYS} day(s)...`);
+  const recentContactsQuery = `SELECT Id FROM Contact WHERE LastModifiedDate = LAST_N_DAYS:${RECENT_DAYS}`;
+  const recentContacts = await queryAll(conn, recentContactsQuery);
+  const recentContactIdSet = new Set(recentContacts.map(r => r.Id));
+  console.log(`Found ${recentContactIdSet.size} recently modified Contacts`);
+
+  // --- Step 1b: Get all Contact IDs that have at least one guest record ---
+  console.log(`Querying ${GUEST_OBJECT} for linked Contact IDs...`);
   const guestContactIdQuery = `SELECT ${CONTACT_LOOKUP} FROM ${GUEST_OBJECT} WHERE ${CONTACT_LOOKUP} != null`;
   const guestRefs = await queryAll(conn, guestContactIdQuery);
 
-  const contactIdSet = new Set(guestRefs.map(r => r[CONTACT_LOOKUP]));
-  const allContactIds = [...contactIdSet];
-  console.log(`Found ${allContactIds.length} unique Contacts with guest records`);
+  // Intersect: only check Contacts that both have guest records AND were recently modified
+  const allContactIds = guestRefs
+    .map(r => r[CONTACT_LOOKUP])
+    .filter(id => id && recentContactIdSet.has(id));
+  const uniqueContactIds = [...new Set(allContactIds)];
+  console.log(`${uniqueContactIds.length} of those have linked guest records (will check these)`);
 
   // --- Step 2: Fetch Contact details in batches ---
   console.log('\nFetching Contact details...');
-  const contactMap = new Map(); // Id → {FirstName, LastName, Email}
+  const contactMap = new Map(); // Id → {FirstName, LastName, Email, LastModifiedDate}
 
-  for (let i = 0; i < allContactIds.length; i += BATCH_SIZE) {
-    const batch = allContactIds.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < uniqueContactIds.length; i += BATCH_SIZE) {
+    const batch = uniqueContactIds.slice(i, i + BATCH_SIZE);
     const escaped = batch.map(id => `'${id}'`).join(',');
-    const query = `SELECT Id, FirstName, LastName, Email FROM Contact WHERE Id IN (${escaped})`;
+    const query = `SELECT Id, FirstName, LastName, Email, LastModifiedDate FROM Contact WHERE Id IN (${escaped})`;
     try {
       const records = await queryAll(conn, query);
       for (const r of records) {
-        contactMap.set(r.Id, { firstName: r.FirstName || '', lastName: r.LastName || '', email: r.Email || '' });
+        contactMap.set(r.Id, {
+          firstName: r.FirstName || '',
+          lastName: r.LastName || '',
+          email: r.Email || '',
+          lastModified: r.LastModifiedDate ? r.LastModifiedDate.slice(0, 10) : ''
+        });
       }
     } catch (err) {
       console.error(`  Error fetching Contact batch at offset ${i}:`, err.message);
@@ -106,7 +122,7 @@ async function main() {
   // guestDateMap: contactId → sorted check-in dates
   const guestDateMap = new Map();
 
-  for (let i = 0; i < allContactIds.length; i += BATCH_SIZE) {
+  for (let i = 0; i < uniqueContactIds.length; i += BATCH_SIZE) {
     const batch = allContactIds.slice(i, i + BATCH_SIZE);
     const escaped = batch.map(id => `'${id}'`).join(',');
     const query = `SELECT ${CONTACT_LOOKUP}, Guest_First_Name__c, Guest_Last_Name__c, Check_In_Date__c FROM ${GUEST_OBJECT} WHERE ${CONTACT_LOOKUP} IN (${escaped})`;
@@ -147,6 +163,7 @@ async function main() {
         contactName: `${contact.firstName} ${contact.lastName}`.trim(),
         guestNames: guestNamesDisplay,
         checkInDates: dates,
+        lastModified: contact.lastModified,
       });
     }
   }
@@ -158,12 +175,12 @@ async function main() {
   } else {
     console.log(`  Found ${conflicts.length} potentially affected Contact(s):\n`);
     console.log(
-      `${'Contact ID'.padEnd(20)} ${'Email'.padEnd(35)} ${'Contact Name'.padEnd(25)} Guest Name(s)`
+      `${'Modified'.padEnd(12)} ${'Contact ID'.padEnd(20)} ${'Email'.padEnd(35)} ${'Contact Name'.padEnd(25)} Guest Name(s)`
     );
-    console.log('-'.repeat(120));
+    console.log('-'.repeat(132));
     for (const c of conflicts) {
       console.log(
-        `${c.contactId.padEnd(20)} ${c.email.padEnd(35)} ${c.contactName.padEnd(25)} ${c.guestNames}`
+        `${c.lastModified.padEnd(12)} ${c.contactId.padEnd(20)} ${c.email.padEnd(35)} ${c.contactName.padEnd(25)} ${c.guestNames}`
       );
     }
   }
@@ -178,9 +195,9 @@ async function main() {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const csvPath = path.join(outputDir, `name-conflicts-${timestamp}.csv`);
 
-    const header = 'ContactId,ContactEmail,ContactName,GuestNames,CheckInDates\n';
+    const header = 'LastModified,ContactId,ContactEmail,ContactName,GuestNames,CheckInDates\n';
     const rows = conflicts.map(c =>
-      [c.contactId, c.email, c.contactName, c.guestNames, c.checkInDates]
+      [c.lastModified, c.contactId, c.email, c.contactName, c.guestNames, c.checkInDates]
         .map(v => `"${String(v).replace(/"/g, '""')}"`)
         .join(',')
     );
