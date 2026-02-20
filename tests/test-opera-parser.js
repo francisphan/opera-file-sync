@@ -6,8 +6,8 @@
  */
 
 require('dotenv').config();
-const { parseOPERAFiles, findMatchingInvoiceFile } = require('./src/parsers/opera-parser');
-const logger = require('./src/logger');
+const { parseOPERAFiles, findMatchingInvoiceFile } = require('../src/parsers/opera-parser');
+const logger = require('../src/logger');
 
 async function testParser() {
   logger.info('='.repeat(70));

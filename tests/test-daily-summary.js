@@ -11,10 +11,10 @@
  */
 
 require('dotenv').config();
-const logger = require('./src/logger');
-const Notifier = require('./src/notifier');
-const DailyStats = require('./src/daily-stats');
-const FileTracker = require('./src/file-tracker');
+const logger = require('../src/logger');
+const Notifier = require('../src/notifier');
+const DailyStats = require('../src/daily-stats');
+const FileTracker = require('../src/file-tracker');
 
 logger.level = 'info';
 

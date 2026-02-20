@@ -8,11 +8,11 @@
  */
 
 require('dotenv').config();
-const logger = require('./src/logger');
-const OracleClient = require('./src/oracle-client');
-const SalesforceClient = require('./src/salesforce-client');
-const { queryGuestsByIds } = require('./src/opera-db-query');
-const { mapLanguageToSalesforce } = require('./src/guest-utils');
+const logger = require('../src/logger');
+const OracleClient = require('../src/oracle-client');
+const SalesforceClient = require('../src/salesforce-client');
+const { queryGuestsByIds } = require('../src/opera-db-query');
+const { mapLanguageToSalesforce } = require('../src/guest-utils');
 
 logger.level = 'info';
 

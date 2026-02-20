@@ -7,8 +7,8 @@
  */
 
 require('dotenv').config();
-const Notifier = require('./src/notifier');
-const logger = require('./src/logger');
+const Notifier = require('../src/notifier');
+const logger = require('../src/logger');
 
 async function testNotifications() {
   logger.info('='.repeat(70));

@@ -9,9 +9,9 @@
   "scripts": {
     "start": "node opera-file-sync.js",
     "start:db": "node opera-db-sync.js",
-    "test": "node test-connection.js",
-    "test:oracle": "node test-oracle-connection.js",
-    "test:notifications": "node test-notifications.js",
+    "test": "node tests/test-connection.js",
+    "test:oracle": "node tests/test-oracle-connection.js",
+    "test:notifications": "node tests/test-notifications.js",
     "dry-run": "node scripts/dry-run.js",
     "dry-run:verbose": "node scripts/dry-run.js --verbose",
     "report:duplicates": "node scripts/duplicate-report.js",

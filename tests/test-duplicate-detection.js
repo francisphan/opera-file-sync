@@ -8,9 +8,9 @@
  */
 
 require('dotenv').config();
-const logger = require('./src/logger');
-const SalesforceClient = require('./src/salesforce-client');
-const DuplicateDetector = require('./src/duplicate-detector');
+const logger = require('../src/logger');
+const SalesforceClient = require('../src/salesforce-client');
+const DuplicateDetector = require('../src/duplicate-detector');
 
 logger.level = 'info';
 

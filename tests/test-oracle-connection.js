@@ -7,8 +7,8 @@
  */
 
 require('dotenv').config();
-const OracleClient = require('./src/oracle-client');
-const logger = require('./src/logger');
+const OracleClient = require('../src/oracle-client');
+const logger = require('../src/logger');
 
 // Force info level for this script
 logger.level = 'info';

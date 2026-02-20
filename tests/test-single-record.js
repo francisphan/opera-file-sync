@@ -6,8 +6,8 @@
  */
 
 require('dotenv').config();
-const SalesforceClient = require('./src/salesforce-client');
-const logger = require('./src/logger');
+const SalesforceClient = require('../src/salesforce-client');
+const logger = require('../src/logger');
 
 async function testSingleRecord() {
   logger.info('='.repeat(70));
