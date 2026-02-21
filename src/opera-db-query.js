@@ -73,7 +73,7 @@ async function queryGuestsByIds(oracleClient, nameIds) {
         FROM OPERA.RESERVATION_NAME
         WHERE RESORT = 'VINES'
           AND RESV_STATUS IN ('RESERVED','CHECKED IN','CHECKED OUT')
-          AND BEGIN_DATE <= TRUNC(SYSDATE) + 7
+          AND BEGIN_DATE <= ADD_MONTHS(TRUNC(SYSDATE), 2)
       ) rn ON n.NAME_ID = rn.NAME_ID AND rn.rn = 1
       WHERE n.NAME_ID IN (${placeholders.join(',')})
     `, binds);
@@ -174,12 +174,12 @@ async function queryGuestsSince(oracleClient, sinceTimestamp) {
         WHERE RESORT = 'VINES'
           AND (INSERT_DATE >= :since OR UPDATE_DATE >= :since)
         UNION
-        -- Guests checking in within the next 7 days: may have been booked before
+        -- Guests checking in within the next 2 months: may have been booked before
         -- last sync with no recent UPDATE_DATE, but their check-in window is now open
         SELECT NAME_ID FROM OPERA.RESERVATION_NAME
         WHERE RESORT = 'VINES'
           AND RESV_STATUS IN ('RESERVED','CHECKED IN','CHECKED OUT')
-          AND TRUNC(BEGIN_DATE) BETWEEN TRUNC(SYSDATE) AND TRUNC(SYSDATE) + 7
+          AND TRUNC(BEGIN_DATE) BETWEEN TRUNC(SYSDATE) AND ADD_MONTHS(TRUNC(SYSDATE), 2)
       )
     `, { since: new Date(sinceTimestamp) });
     nameIds = rows.map(r => r.NAME_ID);
