@@ -14,6 +14,7 @@
     "test:notifications": "node tests/test-notifications.js",
     "dry-run": "node scripts/dry-run.js",
     "dry-run:verbose": "node scripts/dry-run.js --verbose",
+    "dry-run:email": "node scripts/dry-run.js --email",
     "report:duplicates": "node scripts/duplicate-report.js",
     "report:duplicates:send": "node scripts/duplicate-report.js --send",
     "build:bundle": "ncc build opera-file-sync.js -o dist",
