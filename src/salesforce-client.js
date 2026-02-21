@@ -1,6 +1,6 @@
 const jsforce = require('jsforce');
 const logger = require('./logger');
-const { transformToContact, transformToTVRSGuest } = require('./guest-utils');
+const { transformToContact, transformToTVRSGuest, GUEST_DIFF_SOQL_FIELDS, diffGuestRecord } = require('./guest-utils');
 
 class SalesforceClient {
   constructor(config) {
@@ -326,7 +326,7 @@ class SalesforceClient {
     for (let i = 0; i < successContactIds.length; i += batchSize) {
       const idBatch = successContactIds.slice(i, i + batchSize);
       const escaped = idBatch.map(id => `'${id}'`).join(',');
-      const query = `SELECT Id, ${contactLookup}, Check_In_Date__c FROM ${guestObject} WHERE ${contactLookup} IN (${escaped})`;
+      const query = `SELECT Id, ${contactLookup}, Check_In_Date__c, ${GUEST_DIFF_SOQL_FIELDS} FROM ${guestObject} WHERE ${contactLookup} IN (${escaped})`;
 
       try {
         let result = await this.connection.query(query);
@@ -337,7 +337,7 @@ class SalesforceClient {
         }
         for (const rec of allRecords) {
           if (rec[contactLookup] && rec.Check_In_Date__c) {
-            existingGuestMap.set(`${rec[contactLookup]}|${rec.Check_In_Date__c}`, rec.Id);
+            existingGuestMap.set(`${rec[contactLookup]}|${rec.Check_In_Date__c}`, rec);
           }
         }
       } catch (err) {
@@ -366,10 +366,15 @@ class SalesforceClient {
       if (matchKey && seenGuestKeys.has(matchKey)) continue;
       if (matchKey) seenGuestKeys.add(matchKey);
 
-      const existingId = matchKey ? existingGuestMap.get(matchKey) : null;
-      if (existingId) {
-        guestRecord.Id = existingId;
-        guestsToUpdate.push({ record: guestRecord, entry });
+      const currentRecord = matchKey ? existingGuestMap.get(matchKey) : null;
+      if (currentRecord) {
+        const changes = diffGuestRecord(currentRecord, guestRecord);
+        if (changes.length === 0) {
+          logger.debug(`Skipping no-op update for ${guestRecord.Email__c} check-in ${checkInDate} — no field changes`);
+        } else {
+          guestRecord.Id = currentRecord.Id;
+          guestsToUpdate.push({ record: guestRecord, entry });
+        }
       } else {
         guestsToCreate.push({ record: guestRecord, entry });
       }

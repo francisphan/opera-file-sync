@@ -201,11 +201,67 @@ function transformToTVRSGuest(customer, invoice, contactId) {
   return record;
 }
 
+/**
+ * All fields written by transformToTVRSGuest — used for SOQL fetches and field diffing.
+ */
+const GUEST_DIFF_FIELDS = [
+  { key: 'Guest_First_Name__c',               label: 'First Name' },
+  { key: 'Guest_Last_Name__c',                label: 'Last Name' },
+  { key: 'City__c',                           label: 'City' },
+  { key: 'State_Province__c',                 label: 'State/Province' },
+  { key: 'Country__c',                        label: 'Country' },
+  { key: 'Telephone__c',                      label: 'Phone' },
+  { key: 'Language__c',                       label: 'Language' },
+  { key: 'Check_Out_Date__c',                 label: 'Check-out Date' },
+  { key: 'Future_Sales_Prospect__c',          label: 'Future Sales Prospect',         boolean: true },
+  { key: 'TVG__c',                            label: 'TVG',                           boolean: true },
+  { key: 'Greeted_at_Check_In__c',            label: 'Greeted at Check-in',           boolean: true },
+  { key: 'Received_PV_Explanation__c',        label: 'Received PV Explanation',       boolean: true },
+  { key: 'Vineyard_Tour__c',                  label: 'Vineyard Tour',                 boolean: true },
+  { key: 'Did_TVG_Tasting_With_Sales_Rep__c', label: 'TVG Tasting (Sales Rep)',       boolean: true },
+  { key: 'Did_TVG_Tasting_with_Sommelier__c', label: 'TVG Tasting (Sommelier)',       boolean: true },
+  { key: 'Villa_Tour__c',                     label: 'Villa Tour',                    boolean: true },
+  { key: 'Attended_Happy_Hour__c',            label: 'Attended Happy Hour',           boolean: true },
+  { key: 'Brochure_Clicked__c',               label: 'Brochure Clicked',              boolean: true },
+  { key: 'Replied_to_Mkt_campaign_2025__c',   label: 'Replied to Mkt Campaign 2025', boolean: true },
+  { key: 'In_Conversation__c',                label: 'In Conversation',               boolean: true },
+  { key: 'Not_interested__c',                 label: 'Not Interested',                boolean: true },
+  { key: 'Ready_for_pardot_email_list__c',    label: 'Ready for Pardot Email List',   boolean: true },
+  { key: 'In_Conversation_PV__c',             label: 'In Conversation (PV)',          boolean: true },
+  { key: 'Follow_up__c',                      label: 'Follow Up',                     boolean: true },
+  { key: 'Ready_for_PV_mail__c',              label: 'Ready for PV Mail',             boolean: true },
+];
+
+const GUEST_DIFF_SOQL_FIELDS = GUEST_DIFF_FIELDS.map(f => f.key).join(', ');
+
+/**
+ * Diff a current Salesforce TVRS_Guest__c record against a proposed incoming record.
+ * Returns only the fields that would actually change.
+ * Boolean fields: null/undefined treated as false.
+ * Text fields: null/undefined treated as empty string.
+ */
+function diffGuestRecord(current, proposed) {
+  const changes = [];
+  for (const field of GUEST_DIFF_FIELDS) {
+    const cur = field.boolean ? (current[field.key] ?? false) : (current[field.key] ?? null);
+    const pro = field.boolean ? (proposed[field.key] ?? false) : (proposed[field.key] ?? null);
+    const curStr = cur === null ? '' : String(cur);
+    const proStr = pro === null ? '' : String(pro);
+    if (curStr !== proStr) {
+      changes.push({ ...field, from: cur, to: pro });
+    }
+  }
+  return changes;
+}
+
 module.exports = {
   AGENT_DOMAIN_KEYWORDS,
   sanitizeEmail,
   isAgentEmail,
   transformToContact,
   transformToTVRSGuest,
-  mapLanguageToSalesforce
+  mapLanguageToSalesforce,
+  GUEST_DIFF_FIELDS,
+  GUEST_DIFF_SOQL_FIELDS,
+  diffGuestRecord,
 };
