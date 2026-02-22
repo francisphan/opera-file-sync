@@ -1,6 +1,7 @@
 const nodemailer = require('nodemailer');
 const axios = require('axios');
 const logger = require('./logger');
+const { mapLanguageToSalesforce } = require('./guest-utils');
 
 class Notifier {
   constructor() {
@@ -537,6 +538,7 @@ No action required - the system is operating normally.
     const agentDetails = stats.skippedAgentDetails || [];
     const invalidDetails = stats.skippedInvalidDetails || [];
     const duplicateDetails = stats.skippedDuplicateDetails || [];
+    const reviewDetails = stats.needsReviewDetails || [];
 
     const formatDetailList = (items) =>
       items.map(r => `  - ${r.firstName} ${r.lastName} <${r.email}>${r.category ? ` (${r.category})` : r.reason ? ` (${r.reason})` : ''}`).join('\n');
@@ -552,11 +554,13 @@ Records Synced: ${stats.recordsSynced || 0}
 Skipped (Agents/Companies): ${stats.skippedAgents || 0}
 Skipped (Duplicates): ${stats.skippedDuplicates || 0}
 Skipped (Invalid/No Email): ${stats.skippedInvalid || 0}
+Needs Review: ${stats.needsReview || 0}
 Errors: ${stats.errors || 0}
 
 ${agentDetails.length > 0 ? `\nSKIPPED - AGENTS/COMPANIES (please review):\n${formatDetailList(agentDetails)}` : ''}
 ${duplicateDetails.length > 0 ? `\nSKIPPED - DUPLICATES (please review):\n${formatDetailList(duplicateDetails)}` : ''}
 ${invalidDetails.length > 0 ? `\nSKIPPED - INVALID/NO EMAIL (please review):\n${formatDetailList(invalidDetails)}` : ''}
+${reviewDetails.length > 0 ? `\nNEEDS REVIEW (manual entry required):\n${reviewDetails.map(r => `  - ${r.firstName} ${r.lastName} <${r.email}> (${r.reason}) check-in: ${r.checkInDate || '—'}`).join('\n')}` : ''}
 ${stats.errors > 0 ? `\nRECENT ERRORS:\n${(stats.errorDetails || []).map(e => `- [${new Date(e.time).toLocaleTimeString()}] ${e.message}`).join('\n')}` : ''}
 
 ${stats.totalFiles ? `\nALL-TIME STATISTICS:\nTotal Files: ${stats.totalFiles}\nSuccessful: ${stats.totalSuccess}\nFailed: ${stats.totalFailed}` : ''}
@@ -586,6 +590,11 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
           <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Skipped (Invalid/No Email)</td>
           <td style="padding: 8px; border: 1px solid #ddd;">${stats.skippedInvalid || 0}</td>
         </tr>
+        ${(stats.needsReview || 0) > 0 ? `
+        <tr style="background: #fffbeb;">
+          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Needs Review (manual entry)</td>
+          <td style="padding: 8px; border: 1px solid #ddd; color: #d97706; font-weight: bold;">${stats.needsReview}</td>
+        </tr>` : ''}
         <tr style="background: ${stats.errors > 0 ? '#ffebee' : '#f5f5f5'};">
           <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Errors</td>
           <td style="padding: 8px; border: 1px solid #ddd; ${stats.errors > 0 ? 'color: red; font-weight: bold;' : ''}">${stats.errors || 0}</td>
@@ -647,6 +656,50 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
             <td style="padding: 6px 10px; border: 1px solid #ddd; color: #999;">${r.operaId || ''}</td>
           </tr>`).join('')}
         </table>
+      ` : ''}
+
+      ${reviewDetails.length > 0 ? `
+        <h3>⚠️ Needs Review — Manual Entry Required (${reviewDetails.length})</h3>
+        <p style="font-size: 12px; color: #6b7280; margin: 0 0 12px;">
+          Each card shows the Salesforce field API name, label, and value for manual entry.
+        </p>
+        ${reviewDetails.map(r => {
+          const name = `${r.firstName || ''} ${r.lastName || ''}`.trim();
+          const reasonLabel = r.reason === 'shared-email-in-batch' ? 'Shared-email name conflict' : r.reason === 'multiple-sf-contacts' ? 'Ambiguous — 2+ SF Contacts' : r.reason;
+          const fields = [
+            ['Email__c', 'Email', r.email],
+            ['Guest_First_Name__c', 'First Name', r.firstName],
+            ['Guest_Last_Name__c', 'Last Name', r.lastName],
+            ['Telephone__c', 'Phone', r.phone],
+            ['City__c', 'City', r.billingCity],
+            ['State_Province__c', 'State/Province', r.billingState],
+            ['Country__c', 'Country', r.billingCountry],
+            ['Language__c', 'Language', mapLanguageToSalesforce(r.language)],
+            ['Check_In_Date__c', 'Check-in', r.checkInDate],
+            ['Check_Out_Date__c', 'Check-out', r.checkOutDate],
+          ];
+          const fieldRows = fields.map(([api, label, val]) => {
+            const display = val != null && val !== '' ? String(val) : '<em style="color:#9ca3af">(empty)</em>';
+            return `<tr>
+              <td style="padding:5px 10px;border-top:1px solid #f1f5f9;color:#6b7280;font-family:monospace;font-size:11px;width:36%">${api}</td>
+              <td style="padding:5px 10px;border-top:1px solid #f1f5f9;color:#6b7280;width:28%">${label}</td>
+              <td style="padding:5px 10px;border-top:1px solid #f1f5f9;width:36%">${display}</td>
+            </tr>`;
+          }).join('');
+          return `<div style="border:1px solid #e5e7eb;border-radius:6px;margin-bottom:12px;overflow:hidden;border-left:4px solid #f59e0b">
+            <div style="background:#f1f5f9;padding:8px 14px;font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:center">
+              ${name} <span style="font-weight:400;color:#6b7280;font-size:12px">${r.email} &nbsp;·&nbsp; ${reasonLabel}</span>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+              <thead><tr>
+                <th style="padding:5px 10px;text-align:left;font-size:11px;color:#6b7280;background:#f8fafc">API Field</th>
+                <th style="padding:5px 10px;text-align:left;font-size:11px;color:#6b7280;background:#f8fafc">Label</th>
+                <th style="padding:5px 10px;text-align:left;font-size:11px;color:#6b7280;background:#f8fafc">Value</th>
+              </tr></thead>
+              <tbody>${fieldRows}</tbody>
+            </table>
+          </div>`;
+        }).join('')}
       ` : ''}
 
       ${stats.errors > 0 ? `

@@ -176,7 +176,13 @@ class SalesforceClient {
         email: (entry.customer.email || '').toLowerCase(),
         firstName: entry.customer.firstName || '',
         lastName: entry.customer.lastName || '',
+        phone: entry.customer.phone || '',
+        billingCity: entry.customer.billingCity || '',
+        billingState: entry.customer.billingState || '',
+        billingCountry: entry.customer.billingCountry || '',
+        language: entry.customer.language || '',
         checkInDate: (entry.invoice && entry.invoice.checkIn) || null,
+        checkOutDate: (entry.invoice && entry.invoice.checkOut) || null,
         reason,
         ...(details ? { details } : {})
       });

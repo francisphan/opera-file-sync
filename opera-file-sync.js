@@ -364,6 +364,10 @@ async function processFile(filePath) {
       // Track daily stats
       dailyStats.addUpload(results.success);
 
+      if (results.needsReview && results.needsReview.length > 0) {
+        dailyStats.addNeedsReview(results.needsReview.length, results.needsReview);
+      }
+
       // Notify success via Slack
       await notifier.notifyFileProcessed(filename, results.success, filtered ? filtered.length : 0);
 

@@ -49,9 +49,9 @@ function setupDailySummary(notifier, dailyStats, fileTracker = null) {
     try {
       const stats = dailyStats.getStats();
 
-      // Only send if there was activity (or errors)
-      if (stats.uploaded > 0 || stats.skippedAgents > 0 || stats.skippedDuplicates > 0 || stats.errors > 0) {
-        logger.info(`Activity detected: ${stats.uploaded} uploaded, ${stats.skippedAgents + stats.skippedDuplicates} skipped, ${stats.errors} errors`);
+      // Only send if there was activity (or errors/review items)
+      if (stats.uploaded > 0 || stats.skippedAgents > 0 || stats.skippedDuplicates > 0 || stats.needsReview > 0 || stats.errors > 0) {
+        logger.info(`Activity detected: ${stats.uploaded} uploaded, ${stats.skippedAgents + stats.skippedDuplicates} skipped, ${stats.needsReview || 0} review, ${stats.errors} errors`);
 
         // Prepare stats object for email
         const emailStats = {
@@ -63,6 +63,8 @@ function setupDailySummary(notifier, dailyStats, fileTracker = null) {
           skippedDuplicateDetails: stats.skippedDuplicateDetails || [],
           skippedInvalid: stats.skippedInvalid,
           skippedInvalidDetails: stats.skippedInvalidDetails || [],
+          needsReview: stats.needsReview || 0,
+          needsReviewDetails: stats.needsReviewDetails || [],
           errors: stats.errors,
           errorDetails: stats.errorDetails.slice(0, 10) // First 10 errors
         };
@@ -122,6 +124,8 @@ async function triggerDailySummary(notifier, dailyStats, fileTracker = null) {
     skippedDuplicateDetails: stats.skippedDuplicateDetails || [],
     skippedInvalid: stats.skippedInvalid,
     skippedInvalidDetails: stats.skippedInvalidDetails || [],
+    needsReview: stats.needsReview || 0,
+    needsReviewDetails: stats.needsReviewDetails || [],
     errors: stats.errors,
     errorDetails: stats.errorDetails.slice(0, 10)
   };

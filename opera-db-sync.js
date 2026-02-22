@@ -162,6 +162,10 @@ async function poll() {
     syncState.markSuccess(results.success);
     dailyStats.addUpload(results.success);
 
+    if (results.needsReview && results.needsReview.length > 0) {
+      dailyStats.addNeedsReview(results.needsReview.length, results.needsReview);
+    }
+
     await notifier.notifyFileProcessed('db-poll', results.success, filtered.length);
 
     if (notifier.consecutiveErrors > 0) {
