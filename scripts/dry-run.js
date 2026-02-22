@@ -183,65 +183,44 @@ function buildDryRunEmail(r) {
     return cards + moreNote;
   }
 
-  // ── Review card helpers (for needsReview sections) ─────────────────────────
-  const REVIEW_CARD_FIELDS = [
-    { api: 'Email__c',           label: 'Email',          get: e => e.customer.email },
-    { api: 'Guest_First_Name__c', label: 'First Name',    get: e => e.customer.firstName },
-    { api: 'Guest_Last_Name__c',  label: 'Last Name',     get: e => e.customer.lastName },
-    { api: 'Telephone__c',       label: 'Phone',          get: e => e.customer.phone },
-    { api: 'City__c',            label: 'City',           get: e => e.customer.billingCity },
-    { api: 'State_Province__c',  label: 'State/Province', get: e => e.customer.billingState },
-    { api: 'Country__c',         label: 'Country',        get: e => e.customer.billingCountry },
-    { api: 'Language__c',        label: 'Language',        get: e => mapLanguageToSalesforce(e.customer.language) },
-    { api: 'Check_In_Date__c',   label: 'Check-in',       get: e => e.invoice?.checkIn },
-    { api: 'Check_Out_Date__c',  label: 'Check-out',      get: e => e.invoice?.checkOut },
+  // ── Review table helpers (for needsReview sections) ─────────────────────────
+  const REVIEW_COLS = [
+    { label: 'Name',      get: e => `${e.customer.firstName || ''} ${e.customer.lastName || ''}`.trim() },
+    { label: 'Email',     get: e => e.customer.email },
+    { label: 'Phone',     get: e => e.customer.phone },
+    { label: 'City',      get: e => e.customer.billingCity },
+    { label: 'Country',   get: e => e.customer.billingCountry },
+    { label: 'Language',  get: e => mapLanguageToSalesforce(e.customer.language) },
+    { label: 'Check-in',  get: e => e.invoice?.checkIn },
+    { label: 'Check-out', get: e => e.invoice?.checkOut },
   ];
 
-  function reviewCard(entry) {
-    const name  = `${entry.customer.firstName || ''} ${entry.customer.lastName || ''}`.trim();
-    const email = entry.customer.email || '';
-    const rows  = REVIEW_CARD_FIELDS.map(f => {
-      const val = f.get(entry);
-      const display = val != null && val !== '' ? String(val) : '<em style="color:#9ca3af">(empty)</em>';
-      return `<tr>
-        <td style="padding:5px 14px;border-top:1px solid #f1f5f9;color:#6b7280;width:36%;font-family:monospace;font-size:11px">${f.api}</td>
-        <td style="padding:5px 14px;border-top:1px solid #f1f5f9;color:#6b7280;width:28%">${f.label}</td>
-        <td style="padding:5px 14px;border-top:1px solid #f1f5f9;width:36%">${display}</td>
-      </tr>`;
-    }).join('');
-    return `<div class="diff-record">
-      <div class="dr-header">${name} <span class="dr-meta">${email}</span></div>
-      <table><thead><tr>
-        <th style="padding:5px 14px;text-align:left;font-size:11px;color:#6b7280;background:#f8fafc">API Field</th>
-        <th style="padding:5px 14px;text-align:left;font-size:11px;color:#6b7280;background:#f8fafc">Label</th>
-        <th style="padding:5px 14px;text-align:left;font-size:11px;color:#6b7280;background:#f8fafc">Value</th>
-      </tr></thead><tbody>${rows}</tbody></table>
-    </div>`;
-  }
-
-  function conflictCardSection(conflictEmails, emailGroups) {
-    if (!conflictEmails.size) return '<p style="color:#9ca3af;font-size:13px;">None.</p>';
-    const html = [...conflictEmails].slice(0, MAX_LIST).map(email => {
-      const entries = emailGroups.get(email) || [];
-      const cards   = entries.map(e => reviewCard(e)).join('');
-      return `<div style="border-left:4px solid #f59e0b;padding-left:12px;margin-bottom:20px">
-        <p style="font-size:13px;font-weight:600;margin:0 0 8px;color:#92400e">${email} — ${entries.length} conflicting entries</p>
-        ${cards}
-      </div>`;
-    }).join('');
-    const more = conflictEmails.size > MAX_LIST
-      ? `<p style="color:#9ca3af;font-size:12px;font-style:italic">… and ${conflictEmails.size - MAX_LIST} more emails not shown</p>` : '';
-    return html + more;
-  }
-
-  function ambiguousCardSection(entries) {
+  function reviewTable(entries) {
     if (!entries.length) return '<p style="color:#9ca3af;font-size:13px;">None.</p>';
     const shown = entries.slice(0, MAX_LIST);
     const more  = entries.length - shown.length;
-    const cards = shown.map(e => reviewCard(e)).join('');
-    const moreNote = more > 0
-      ? `<p style="color:#9ca3af;font-size:12px;font-style:italic">… and ${more} more not shown</p>` : '';
-    return cards + moreNote;
+    const hdr = REVIEW_COLS.map(c => `<th>${c.label}</th>`).join('');
+    const rows = shown.map(e => {
+      const cells = REVIEW_COLS.map(c => {
+        const val = c.get(e);
+        return `<td>${val || ''}</td>`;
+      }).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+    const moreRow = more > 0
+      ? `<tr><td colspan="${REVIEW_COLS.length}" style="color:#9ca3af;font-style:italic;padding:8px 12px">… and ${more} more</td></tr>` : '';
+    return `<div style="overflow-x:auto"><table class="data">
+      <thead><tr>${hdr}</tr></thead>
+      <tbody>${rows}${moreRow}</tbody>
+    </table></div>`;
+  }
+
+  function conflictTableSection(conflictEmails, emailGroups) {
+    if (!conflictEmails.size) return '<p style="color:#9ca3af;font-size:13px;">None.</p>';
+    const allEntries = [...conflictEmails].slice(0, MAX_LIST).flatMap(email => emailGroups.get(email) || []);
+    const more = conflictEmails.size > MAX_LIST
+      ? `<p style="color:#9ca3af;font-size:12px;font-style:italic">… and ${conflictEmails.size - MAX_LIST} more emails not shown</p>` : '';
+    return reviewTable(allEntries) + more;
   }
 
   const flagOverwrites   = r.flagOverwrites || [];
@@ -319,15 +298,13 @@ function buildDryRunEmail(r) {
     ${r.batchConflictEmails.size > 0 ? `
     <div class="section">
       <h2>⚠ Shared-email Name Conflicts (→ needsReview)</h2>
-      <p style="font-size:12px;color:#6b7280;margin:0 0 12px">Each card shows the Salesforce field API name, label, and value for manual entry.</p>
-      ${conflictCardSection(r.batchConflictEmails, r.emailGroups)}
+      ${conflictTableSection(r.batchConflictEmails, r.emailGroups)}
     </div>` : ''}
 
     ${r.ambiguousContactEntries.length > 0 ? `
     <div class="section">
       <h2>⚠ Ambiguous Contacts — 2+ SF Matches (→ needsReview)</h2>
-      <p style="font-size:12px;color:#6b7280;margin:0 0 12px">Each card shows the Salesforce field API name, label, and value for manual entry.</p>
-      ${ambiguousCardSection(r.ambiguousContactEntries)}
+      ${reviewTable(r.ambiguousContactEntries)}
     </div>` : ''}
 
     ${r.newContactEntries.length > 0 ? `

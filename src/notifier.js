@@ -660,46 +660,37 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
 
       ${reviewDetails.length > 0 ? `
         <h3>⚠️ Needs Review — Manual Entry Required (${reviewDetails.length})</h3>
-        <p style="font-size: 12px; color: #6b7280; margin: 0 0 12px;">
-          Each card shows the Salesforce field API name, label, and value for manual entry.
-        </p>
-        ${reviewDetails.map(r => {
-          const name = `${r.firstName || ''} ${r.lastName || ''}`.trim();
-          const reasonLabel = r.reason === 'shared-email-in-batch' ? 'Shared-email name conflict' : r.reason === 'multiple-sf-contacts' ? 'Ambiguous — 2+ SF Contacts' : r.reason;
-          const fields = [
-            ['Email__c', 'Email', r.email],
-            ['Guest_First_Name__c', 'First Name', r.firstName],
-            ['Guest_Last_Name__c', 'Last Name', r.lastName],
-            ['Telephone__c', 'Phone', r.phone],
-            ['City__c', 'City', r.billingCity],
-            ['State_Province__c', 'State/Province', r.billingState],
-            ['Country__c', 'Country', r.billingCountry],
-            ['Language__c', 'Language', mapLanguageToSalesforce(r.language)],
-            ['Check_In_Date__c', 'Check-in', r.checkInDate],
-            ['Check_Out_Date__c', 'Check-out', r.checkOutDate],
-          ];
-          const fieldRows = fields.map(([api, label, val]) => {
-            const display = val != null && val !== '' ? String(val) : '<em style="color:#9ca3af">(empty)</em>';
+        <div style="overflow-x:auto">
+        <table style="border-collapse:collapse;width:100%;font-size:12px;margin-bottom:16px">
+          <tr style="background:#fffbeb">
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Name</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Email</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Phone</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">City</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Country</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Language</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-in</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-out</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Reason</th>
+          </tr>
+          ${reviewDetails.map(r => {
+            const name = `${r.firstName || ''} ${r.lastName || ''}`.trim();
+            const lang = mapLanguageToSalesforce(r.language) || '';
+            const reason = r.reason === 'shared-email-in-batch' ? 'Shared email' : r.reason === 'multiple-sf-contacts' ? '2+ SF Contacts' : r.reason;
             return `<tr>
-              <td style="padding:5px 10px;border-top:1px solid #f1f5f9;color:#6b7280;font-family:monospace;font-size:11px;width:36%">${api}</td>
-              <td style="padding:5px 10px;border-top:1px solid #f1f5f9;color:#6b7280;width:28%">${label}</td>
-              <td style="padding:5px 10px;border-top:1px solid #f1f5f9;width:36%">${display}</td>
+              <td style="padding:6px 10px;border:1px solid #ddd">${name}</td>
+              <td style="padding:6px 10px;border:1px solid #ddd">${r.email || ''}</td>
+              <td style="padding:6px 10px;border:1px solid #ddd">${r.phone || ''}</td>
+              <td style="padding:6px 10px;border:1px solid #ddd">${r.billingCity || ''}</td>
+              <td style="padding:6px 10px;border:1px solid #ddd">${r.billingCountry || ''}</td>
+              <td style="padding:6px 10px;border:1px solid #ddd">${lang}</td>
+              <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkInDate || ''}</td>
+              <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkOutDate || ''}</td>
+              <td style="padding:6px 10px;border:1px solid #ddd;color:#92400e">${reason}</td>
             </tr>`;
-          }).join('');
-          return `<div style="border:1px solid #e5e7eb;border-radius:6px;margin-bottom:12px;overflow:hidden;border-left:4px solid #f59e0b">
-            <div style="background:#f1f5f9;padding:8px 14px;font-size:13px;font-weight:600;display:flex;justify-content:space-between;align-items:center">
-              ${name} <span style="font-weight:400;color:#6b7280;font-size:12px">${r.email} &nbsp;·&nbsp; ${reasonLabel}</span>
-            </div>
-            <table style="width:100%;border-collapse:collapse;font-size:12px">
-              <thead><tr>
-                <th style="padding:5px 10px;text-align:left;font-size:11px;color:#6b7280;background:#f8fafc">API Field</th>
-                <th style="padding:5px 10px;text-align:left;font-size:11px;color:#6b7280;background:#f8fafc">Label</th>
-                <th style="padding:5px 10px;text-align:left;font-size:11px;color:#6b7280;background:#f8fafc">Value</th>
-              </tr></thead>
-              <tbody>${fieldRows}</tbody>
-            </table>
-          </div>`;
-        }).join('')}
+          }).join('')}
+        </table>
+        </div>
       ` : ''}
 
       ${stats.errors > 0 ? `
