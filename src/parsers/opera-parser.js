@@ -158,12 +158,24 @@ async function parseOPERAFiles(customersFile, invoicesFile = null) {
     // Check if this looks like a travel agent / non-guest
     const agentCategory = isAgentEmail(customer);
     if (agentCategory) {
+      // Look up invoice to check if guest has already checked out
+      const agentInvoice = convertInvoiceDates(invoices.get(operaId));
+      const checkOutDate = agentInvoice && agentInvoice.checkOut;
+      const todayArg = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
+
+      // Skip silently if already checked out — can't get a real email anymore
+      if (checkOutDate && checkOutDate < todayArg) {
+        continue;
+      }
+
       filtered.push({
         email: customer.email,
         firstName: customer.firstName,
         lastName: customer.lastName,
         operaId: customer.operaId,
-        category: agentCategory
+        category: agentCategory,
+        checkIn: (agentInvoice && agentInvoice.checkIn) || '',
+        checkOut: checkOutDate || ''
       });
       continue;
     }

@@ -541,7 +541,14 @@ No action required - the system is operating normally.
     const reviewDetails = stats.needsReviewDetails || [];
 
     const formatDetailList = (items) =>
-      items.map(r => `  - ${r.firstName} ${r.lastName} <${r.email}>${r.category ? ` (${r.category})` : r.reason ? ` (${r.reason})` : ''}`).join('\n');
+      items.map(r => {
+        let line = `  - ${r.firstName} ${r.lastName} <${r.email}>`;
+        if (r.category) line += ` (${r.category})`;
+        else if (r.reason) line += ` (${r.reason})`;
+        if (r.checkIn) line += ` check-in: ${r.checkIn}`;
+        if (r.checkOut) line += ` check-out: ${r.checkOut}`;
+        return line;
+      }).join('\n');
 
     const textBody = `
 OPERA to Salesforce Sync - Daily Summary
@@ -557,7 +564,7 @@ Skipped (Invalid/No Email): ${stats.skippedInvalid || 0}
 Needs Review: ${stats.needsReview || 0}
 Errors: ${stats.errors || 0}
 
-${agentDetails.length > 0 ? `\nSKIPPED - AGENTS/COMPANIES (please review):\n${formatDetailList(agentDetails)}` : ''}
+${agentDetails.length > 0 ? `\nSKIPPED - AGENTS/COMPANIES STILL CHECKED IN (please review):\n${formatDetailList(agentDetails)}` : ''}
 ${duplicateDetails.length > 0 ? `\nSKIPPED - DUPLICATES (please review):\n${formatDetailList(duplicateDetails)}` : ''}
 ${invalidDetails.length > 0 ? `\nSKIPPED - INVALID/NO EMAIL (please review):\n${formatDetailList(invalidDetails)}` : ''}
 ${reviewDetails.length > 0 ? `\nNEEDS REVIEW (manual entry required):\n${reviewDetails.map(r => `  - ${r.firstName} ${r.lastName} <${r.email}> (${r.reason}) check-in: ${r.checkInDate || '—'}`).join('\n')}` : ''}
@@ -602,20 +609,22 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
       </table>
 
       ${agentDetails.length > 0 ? `
-        <h3>⚠️ Skipped — Agents/Companies (please review)</h3>
+        <h3>⚠️ Skipped — Agents/Companies still checked in (please review)</h3>
         <table style="border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 16px;">
           <tr style="background: #fff3e0;">
             <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Name</th>
             <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Email</th>
             <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Reason</th>
-            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Opera ID</th>
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;white-space:nowrap">Check-in</th>
+            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;white-space:nowrap">Check-out</th>
           </tr>
           ${agentDetails.map(r => `
           <tr>
             <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.firstName} ${r.lastName}</td>
             <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.email}</td>
             <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.category || ''}</td>
-            <td style="padding: 6px 10px; border: 1px solid #ddd; color: #999;">${r.operaId || ''}</td>
+            <td style="padding: 6px 10px; border: 1px solid #ddd;white-space:nowrap">${r.checkIn || ''}</td>
+            <td style="padding: 6px 10px; border: 1px solid #ddd;white-space:nowrap">${r.checkOut || ''}</td>
           </tr>`).join('')}
         </table>
       ` : ''}

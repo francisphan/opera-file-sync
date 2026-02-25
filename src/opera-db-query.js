@@ -109,12 +109,22 @@ async function queryGuestsByIds(oracleClient, nameIds) {
 
       const agentCategory = isAgentEmail(customer);
       if (agentCategory) {
+        // Skip silently if already checked out — can't get a real email anymore
+        const checkOutStr = row.CHECK_OUT ? formatDate(row.CHECK_OUT) : '';
+        const todayArg = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
+
+        if (checkOutStr && checkOutStr < todayArg) {
+          continue;
+        }
+
         filtered.push({
           email: customer.email,
           firstName: customer.firstName,
           lastName: customer.lastName,
           operaId: customer.operaId,
-          category: agentCategory
+          category: agentCategory,
+          checkIn: row.CHECK_IN ? formatDate(row.CHECK_IN) : '',
+          checkOut: checkOutStr
         });
         continue;
       }
