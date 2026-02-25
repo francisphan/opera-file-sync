@@ -151,6 +151,11 @@ async function poll() {
 
     const results = await sfClient.syncGuestCheckIns(records);
 
+    if (results.andonPulled) {
+      logger.warn('Andon cord active — skipping sync state update, will retry next poll');
+      return;
+    }
+
     if (results.failed > 0 && results.success === 0) {
       const err = new Error(`All ${results.failed} records failed: ${results.errors[0]?.error}`);
       syncState.markFailed(err);

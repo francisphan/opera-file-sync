@@ -348,6 +348,11 @@ async function processFile(filePath) {
       ? await sfClient.syncGuestCheckIns(records)
       : await sfClient.syncRecords(records, CONFIG.salesforce.objectType, CONFIG.salesforce.externalIdField);
 
+    if (results.andonPulled) {
+      logger.warn(`Andon cord active — file "${filename}" left in place for retry`);
+      return;
+    }
+
     // Check results
     if (results.failed > 0) {
       logger.warn(`File processed with errors: ${results.success} success, ${results.failed} failed`);

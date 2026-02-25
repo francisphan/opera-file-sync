@@ -57,6 +57,11 @@ class SalesforceClient {
    * @returns {Object} Results summary
    */
   async syncRecords(records, objectType = 'Account', externalIdField = 'OPERA_Reservation_ID__c') {
+    if (process.env.ANDON_CORD === 'true') {
+      logger.warn('Andon cord pulled — skipping Salesforce sync');
+      return { andonPulled: true, success: 0, failed: 0, errors: [] };
+    }
+
     await this.ensureConnected();
 
     if (!records || records.length === 0) {
@@ -154,6 +159,11 @@ class SalesforceClient {
    * @returns {Object} Results with contacts/guests counters, needsReview array, and flat success/failed aliases
    */
   async syncGuestCheckIns(guestDataList) {
+    if (process.env.ANDON_CORD === 'true') {
+      logger.warn('Andon cord pulled — skipping Salesforce sync');
+      return { andonPulled: true, contacts: { created: 0, failed: 0 }, guests: { created: 0, updated: 0, failed: 0 }, needsReview: [], errors: [], success: 0, failed: 0 };
+    }
+
     await this.ensureConnected();
 
     if (!guestDataList || guestDataList.length === 0) {
