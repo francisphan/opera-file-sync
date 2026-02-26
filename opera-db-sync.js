@@ -15,7 +15,7 @@ const OracleClient = require('./src/oracle-client');
 const SyncState = require('./src/sync-state');
 const Notifier = require('./src/notifier');
 const DailyStats = require('./src/daily-stats');
-const { setupDailySummary } = require('./src/scheduler');
+const { setupDailySummary, setupFrontDeskReport } = require('./src/scheduler');
 const { queryGuestsSince } = require('./src/opera-db-query');
 
 // Configuration
@@ -72,6 +72,9 @@ async function initialize() {
 
   // Setup daily summary scheduler (no fileTracker for DB mode)
   setupDailySummary(notifier, dailyStats, null);
+
+  // Setup front desk report scheduler
+  setupFrontDeskReport(notifier, dailyStats);
   logger.info('Testing Salesforce connection...');
   const sfConnected = await sfClient.test();
   if (!sfConnected) {
@@ -130,15 +133,10 @@ async function poll() {
     const lastSync = syncState.getLastSyncTimestamp();
     logger.debug(`Polling for changes since ${lastSync || 'beginning'}...`);
 
-    const { records, filtered, invalid } = await queryGuestsSince(oracleClient, lastSync);
+    const { records, frontDesk } = await queryGuestsSince(oracleClient, lastSync);
 
-    if (filtered.length > 0) {
-      await notifier.notifyFilteredAgents('db-poll', filtered);
-      dailyStats.addSkipped('agent', filtered.length, filtered);
-    }
-
-    if (invalid.length > 0) {
-      dailyStats.addSkipped('invalid', invalid.length, invalid);
+    if (frontDesk.length > 0) {
+      dailyStats.addFrontDesk(frontDesk.length, frontDesk);
     }
 
     if (records.length === 0) {
@@ -171,7 +169,7 @@ async function poll() {
       dailyStats.addNeedsReview(results.needsReview.length, results.needsReview);
     }
 
-    await notifier.notifyFileProcessed('db-poll', results.success, filtered.length);
+    await notifier.notifyFileProcessed('db-poll', results.success, frontDesk.length);
 
     if (notifier.consecutiveErrors > 0) {
       await notifier.notifyRecovery(results.success);

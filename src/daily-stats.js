@@ -20,12 +20,14 @@ class DailyStats {
       skippedAgents: 0,
       skippedDuplicates: 0,
       skippedInvalid: 0,
+      frontDesk: 0,
       errors: 0,
       needsReview: 0,
       errorDetails: [],
       skippedAgentDetails: [],
       skippedInvalidDetails: [],
       skippedDuplicateDetails: [],
+      frontDeskDetails: [],
       needsReviewDetails: []
     };
     this.load();
@@ -118,6 +120,22 @@ class DailyStats {
    * @param {number} count - Number of items
    * @param {Array} [details] - Array of needsReview objects for the daily report
    */
+  /**
+   * Add front desk items (on-property guests needing email collection)
+   * @param {number} count - Number of items
+   * @param {Array} [details] - Array of front desk guest objects
+   */
+  addFrontDesk(count, details = []) {
+    this.checkDateRollover();
+    this.stats.frontDesk += count;
+    this.stats.frontDeskDetails.push(...details);
+    if (this.stats.frontDeskDetails.length > 100) {
+      this.stats.frontDeskDetails = this.stats.frontDeskDetails.slice(-100);
+    }
+    this.save();
+    logger.debug(`Daily stats: +${count} frontDesk (total: ${this.stats.frontDesk})`);
+  }
+
   addNeedsReview(count, details = []) {
     this.checkDateRollover();
     this.stats.needsReview += count;
@@ -149,12 +167,14 @@ class DailyStats {
       skippedAgents: 0,
       skippedDuplicates: 0,
       skippedInvalid: 0,
+      frontDesk: 0,
       errors: 0,
       needsReview: 0,
       errorDetails: [],
       skippedAgentDetails: [],
       skippedInvalidDetails: [],
       skippedDuplicateDetails: [],
+      frontDeskDetails: [],
       needsReviewDetails: []
     };
     this.save();
@@ -173,6 +193,9 @@ class DailyStats {
         // Check if loaded stats are from today
         if (loaded.date === this.currentDate) {
           this.stats = loaded;
+          // Default missing fields for backward compat with old JSON files
+          this.stats.frontDesk ??= 0;
+          this.stats.frontDeskDetails ??= [];
           logger.debug('Daily stats loaded from file');
         } else {
           logger.info(`Loaded stats from ${loaded.date}, resetting for ${this.currentDate}`);

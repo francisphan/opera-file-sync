@@ -17,7 +17,7 @@ const SalesforceClient = require('./src/salesforce-client');
 const FileTracker = require('./src/file-tracker');
 const Notifier = require('./src/notifier');
 const DailyStats = require('./src/daily-stats');
-const { setupDailySummary } = require('./src/scheduler');
+const { setupDailySummary, setupFrontDeskReport } = require('./src/scheduler');
 const { parseCSV, isCSV } = require('./src/parsers/csv-parser');
 const { parseXML, isXML } = require('./src/parsers/xml-parser');
 const { parseOPERAFiles, findMatchingInvoiceFile, findMatchingCustomersFile } = require('./src/parsers/opera-parser');
@@ -82,6 +82,9 @@ async function initialize() {
 
   // Setup daily summary scheduler
   setupDailySummary(notifier, dailyStats, fileTracker);
+
+  // Setup front desk report scheduler
+  setupFrontDeskReport(notifier, dailyStats);
 
   // Test Salesforce connection
   logger.info('Testing Salesforce connection...');
@@ -267,8 +270,7 @@ async function processFile(filePath) {
   try {
     // Parse file based on format
     let records;
-    let filtered;
-    let invalid;
+    let frontDesk;
     let isOperaFormat = false;
 
     // Check if this is an OPERA customers file
@@ -286,8 +288,7 @@ async function processFile(filePath) {
       // Parse and join OPERA files
       const result = await parseOPERAFiles(filePath, invoicesFile);
       records = result.records;
-      filtered = result.filtered;
-      invalid = result.invalid;
+      frontDesk = result.frontDesk;
       isOperaFormat = true;
     } else if (filename.match(/invoices\d{8}\.csv$/i)) {
       logger.info('Detected OPERA invoices CSV format');
@@ -304,8 +305,7 @@ async function processFile(filePath) {
       // Parse and join OPERA files, then upsert (idempotent - updates existing records with dates)
       const result = await parseOPERAFiles(customersFile, filePath);
       records = result.records;
-      filtered = result.filtered;
-      invalid = result.invalid;
+      frontDesk = result.frontDesk;
       isOperaFormat = true;
     } else if (isCSV(filePath)) {
       logger.info('Detected generic CSV format');
@@ -317,14 +317,9 @@ async function processFile(filePath) {
       throw new Error(`Unsupported file format: ${filename}`);
     }
 
-    // Send notification for filtered agent emails
-    if (filtered && filtered.length > 0) {
-      await notifier.notifyFilteredAgents(filename, filtered);
-      dailyStats.addSkipped('agent', filtered.length, filtered);
-    }
-
-    if (invalid && invalid.length > 0) {
-      dailyStats.addSkipped('invalid', invalid.length, invalid);
+    // Track front desk items (on-property guests needing email collection)
+    if (frontDesk && frontDesk.length > 0) {
+      dailyStats.addFrontDesk(frontDesk.length, frontDesk);
     }
 
     if (!records || records.length === 0) {
@@ -374,7 +369,7 @@ async function processFile(filePath) {
       }
 
       // Notify success via Slack
-      await notifier.notifyFileProcessed(filename, results.success, filtered ? filtered.length : 0);
+      await notifier.notifyFileProcessed(filename, results.success, frontDesk ? frontDesk.length : 0);
 
       // Notify recovery if we had previous errors
       if (notifier.consecutiveErrors > 0) {

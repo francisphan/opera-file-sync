@@ -15,7 +15,8 @@ const AGENT_DOMAIN_KEYWORDS = [
   'cadencetravel', 'dreamvacations', 'tbhtravel', 'foundluxury',
   'privateclients', 'hontravel', 'poptour', 'maintravel', 'kangaroo',
   'primetour', 'booking.com', 'expedia', 'aspirelifestyles',
-  'centurioncard', 'vendor@'
+  'centurioncard', 'vendor@',
+  'vinesofmendoza.com', 'the-vines'
 ];
 
 /**

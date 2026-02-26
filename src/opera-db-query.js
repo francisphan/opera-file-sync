@@ -24,16 +24,16 @@ function formatDate(date) {
  * Query guest data for a list of NAME_IDs
  * @param {OracleClient} oracleClient - Connected Oracle client
  * @param {number[]} nameIds - Array of Opera NAME_IDs
- * @returns {Promise<{records: Array, filtered: Array, invalid: Array}>}
+ * @returns {Promise<{records: Array, frontDesk: Array}>}
  */
 async function queryGuestsByIds(oracleClient, nameIds) {
   if (!nameIds || nameIds.length === 0) {
-    return { records: [], filtered: [], invalid: [] };
+    return { records: [], frontDesk: [] };
   }
 
   const records = [];
-  const filtered = [];
-  const invalid = [];
+  const frontDesk = [];
+  const todayArg = process.env.OVERRIDE_TODAY || new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
   const batchSize = 50;
 
   for (let i = 0; i < nameIds.length; i += batchSize) {
@@ -50,7 +50,7 @@ async function queryGuestsByIds(oracleClient, nameIds) {
              phone.PHONE_NUMBER AS PHONE,
              n.LANGUAGE,
              a.CITY, a.STATE, a.COUNTRY,
-             rn.CHECK_IN, rn.CHECK_OUT
+             rn.CHECK_IN, rn.CHECK_OUT, rn.RESV_STATUS
       FROM OPERA.NAME n
       JOIN OPERA.NAME_PHONE p ON n.NAME_ID = p.NAME_ID
         AND p.PHONE_ROLE = 'EMAIL' AND p.PRIMARY_YN = 'Y'
@@ -68,7 +68,7 @@ async function queryGuestsByIds(oracleClient, nameIds) {
       LEFT JOIN OPERA.NAME_ADDRESS a ON n.NAME_ID = a.NAME_ID
         AND a.PRIMARY_YN = 'Y' AND a.INACTIVE_DATE IS NULL
       LEFT JOIN (
-        SELECT NAME_ID, BEGIN_DATE AS CHECK_IN, END_DATE AS CHECK_OUT,
+        SELECT NAME_ID, BEGIN_DATE AS CHECK_IN, END_DATE AS CHECK_OUT, RESV_STATUS,
                ROW_NUMBER() OVER (PARTITION BY NAME_ID ORDER BY BEGIN_DATE DESC) AS rn
         FROM OPERA.RESERVATION_NAME
         WHERE RESORT = 'VINES'
@@ -84,14 +84,22 @@ async function queryGuestsByIds(oracleClient, nameIds) {
       const cleanedEmail = sanitizeEmail(rawEmail);
 
       if (!cleanedEmail) {
-        logger.debug(`Skipping NAME_ID ${row.NAME_ID} - invalid email: ${rawEmail}`);
-        invalid.push({
-          email: rawEmail,
-          firstName: (row.FIRST || '').trim(),
-          lastName: (row.LAST || '').trim(),
-          operaId: String(row.NAME_ID),
-          reason: 'invalid-email'
-        });
+        // Checking in today → front desk list; otherwise → skip silently
+        const checkInStr = row.CHECK_IN ? formatDate(row.CHECK_IN) : '';
+        const checkOutStr = row.CHECK_OUT ? formatDate(row.CHECK_OUT) : '';
+        const isCheckingInToday = checkInStr === todayArg;
+        if (isCheckingInToday) {
+          logger.debug(`Front desk: NAME_ID ${row.NAME_ID} - invalid email (checking in today)`);
+          frontDesk.push({
+            email: rawEmail,
+            firstName: (row.FIRST || '').trim(),
+            lastName: (row.LAST || '').trim(),
+            operaId: String(row.NAME_ID),
+            reason: 'invalid-email',
+            checkIn: checkInStr,
+            checkOut: checkOutStr
+          });
+        }
         continue;
       }
 
@@ -109,21 +117,21 @@ async function queryGuestsByIds(oracleClient, nameIds) {
 
       const agentCategory = isAgentEmail(customer);
       if (agentCategory) {
-        // Skip silently if already checked out — can't get a real email anymore
+        const checkInStr = row.CHECK_IN ? formatDate(row.CHECK_IN) : '';
         const checkOutStr = row.CHECK_OUT ? formatDate(row.CHECK_OUT) : '';
-        const todayArg = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
+        const isCheckingInToday = checkInStr === todayArg;
 
-        if (checkOutStr && checkOutStr < todayArg) {
+        if (!isCheckingInToday) {
           continue;
         }
 
-        filtered.push({
+        frontDesk.push({
           email: customer.email,
           firstName: customer.firstName,
           lastName: customer.lastName,
           operaId: customer.operaId,
-          category: agentCategory,
-          checkIn: row.CHECK_IN ? formatDate(row.CHECK_IN) : '',
+          reason: agentCategory,
+          checkIn: checkInStr,
           checkOut: checkOutStr
         });
         continue;
@@ -135,14 +143,7 @@ async function queryGuestsByIds(oracleClient, nameIds) {
       } : null;
 
       if (!invoice) {
-        // Guest was found (e.g. email change) but has no past or current check-in
-        filtered.push({
-          email: customer.email,
-          firstName: customer.firstName,
-          lastName: customer.lastName,
-          operaId: customer.operaId,
-          category: 'future-reservation-only'
-        });
+        // Guest has no past or current check-in — skip silently (not on-property)
         continue;
       }
 
@@ -150,22 +151,19 @@ async function queryGuestsByIds(oracleClient, nameIds) {
     }
   }
 
-  if (filtered.length > 0) {
-    logger.info(`Filtered ${filtered.length} agent/company emails`);
-  }
-  if (invalid.length > 0) {
-    logger.info(`Skipped ${invalid.length} guests with invalid emails`);
+  if (frontDesk.length > 0) {
+    logger.info(`Front desk: ${frontDesk.length} on-property guests need email collection`);
   }
   logger.info(`Transformed ${records.length} guest records for Salesforce`);
 
-  return { records, filtered, invalid };
+  return { records, frontDesk };
 }
 
 /**
  * Query guests modified since a given timestamp (for catch-up on startup)
  * @param {OracleClient} oracleClient - Connected Oracle client
  * @param {string|null} sinceTimestamp - ISO timestamp, or null for initial sync
- * @returns {Promise<{records: Array, filtered: Array}>}
+ * @returns {Promise<{records: Array, frontDesk: Array}>}
  */
 async function queryGuestsSince(oracleClient, sinceTimestamp) {
   let nameIds;

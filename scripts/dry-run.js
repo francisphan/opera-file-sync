@@ -225,7 +225,7 @@ function buildDryRunEmail(r) {
 
   const flagOverwrites   = r.flagOverwrites || [];
   const hasIssues        = r.batchConflictEmails.size > 0 || r.ambiguousEmailSet.size > 0
-    || r.invalid > 0 || r.filtered > 0 || flagOverwrites.length > 0;
+    || r.frontDesk > 0 || flagOverwrites.length > 0;
   const totalNeedsReview = r.batchConflictEntries.length + r.ambiguousContactEntries.length;
 
   const subject = `[Dry Run] Opera → Salesforce Preview — ${r.guestsCreate} create, ${r.guestsUpdate} update, ${totalNeedsReview} review`;
@@ -274,10 +274,8 @@ function buildDryRunEmail(r) {
     <div class="section">
       <h2>Oracle Query Results</h2>
       <div class="kv"><span class="k">Raw guests found</span><span class="v">${r.totalRaw}</span></div>
-      <div class="kv"><span class="k">Filtered — agent / proxy</span>
-        <span class="v">${r.filtered > 0 ? `<span class="pill warn">${r.filtered}</span>` : '0'}</span></div>
-      <div class="kv"><span class="k">Invalid email</span>
-        <span class="v">${r.invalid > 0 ? `<span class="pill warn">${r.invalid}</span>` : '0'}</span></div>
+      <div class="kv"><span class="k">Front desk (email needed)</span>
+        <span class="v">${r.frontDesk > 0 ? `<span class="pill warn">${r.frontDesk}</span>` : '0'}</span></div>
       <div class="kv"><span class="k">Eligible for sync</span>
         <span class="v"><span class="pill exists">${r.eligible}</span></span></div>
       ${r.guestsAlreadyInSync > 0 ? `<div class="kv"><span class="k">${r.guestObject} already in sync (no update sent)</span><span class="v">${r.guestsAlreadyInSync}</span></div>` : ''}
@@ -344,7 +342,7 @@ function buildDryRunEmail(r) {
     'SUMMARY',
     `  Since:              ${since}`,
     `  Guests from Oracle: ${r.totalRaw} raw, ${r.eligible} eligible`,
-    `  Filtered/invalid:   ${r.filtered} agent/proxy, ${r.invalid} bad email`,
+    `  Front desk:         ${r.frontDesk} on-property (need email)`,
     `  Contacts CREATE:    ${r.newContacts}`,
     `  Contacts EXIST:     ${r.existingContacts}`,
     `  ${r.guestObject} CREATE: ${r.guestsCreate}`,
@@ -439,31 +437,22 @@ async function main() {
   await oracleClient.connect();
   console.log('  Connected.\n');
 
-  const { records: allRecords, filtered: allFiltered, invalid: allInvalid } =
+  const { records: allRecords, frontDesk: allFrontDesk } =
     await queryGuestsSince(oracleClient, lastSyncTimestamp);
 
   await oracleClient.close();
 
-  const totalRaw = allRecords.length + allFiltered.length + allInvalid.length;
+  const totalRaw = allRecords.length + allFrontDesk.length;
   row('Guests found in Oracle:',     String(totalRaw));
-  row('  Filtered — agent/proxy:',   String(allFiltered.length));
-  row('  Invalid email:',            String(allInvalid.length));
+  row('  Front desk (email needed):', String(allFrontDesk.length));
   row('Eligible for Salesforce sync:', String(allRecords.length));
 
-  if (VERBOSE && allFiltered.length) {
-    console.log('\n    Filtered (agent/proxy):');
-    allFiltered.slice(0, 20).forEach(e => {
-      console.log(`      · ${e.firstName} ${e.lastName} <${e.email}> [${e.category}]`);
+  if (VERBOSE && allFrontDesk.length) {
+    console.log('\n    Front desk (on-property, need email):');
+    allFrontDesk.slice(0, 20).forEach(e => {
+      console.log(`      · ${e.firstName} ${e.lastName} <${e.email || '(none)'}> [${e.reason}]`);
     });
-    if (allFiltered.length > 20) console.log(`      … and ${allFiltered.length - 20} more`);
-  }
-
-  if (VERBOSE && allInvalid.length) {
-    console.log('\n    Invalid email:');
-    allInvalid.slice(0, 20).forEach(e => {
-      console.log(`      · ${e.firstName} ${e.lastName} <${e.email}>`);
-    });
-    if (allInvalid.length > 20) console.log(`      … and ${allInvalid.length - 20} more`);
+    if (allFrontDesk.length > 20) console.log(`      … and ${allFrontDesk.length - 20} more`);
   }
 
   if (allRecords.length === 0) {
@@ -471,7 +460,7 @@ async function main() {
     if (SEND_EMAIL) {
       const report = {
         runAt: now, lastSyncTimestamp, lastSyncStatus, lastSyncRecordCount,
-        totalRaw, filtered: allFiltered.length, invalid: allInvalid.length, eligible: 0,
+        totalRaw, frontDesk: allFrontDesk.length, eligible: 0,
         emailGroups: new Map(), batchConflictEmails: new Set(), batchConflictEntries: [],
         newContacts: 0, existingContacts: 0, ambiguousEmailSet: new Set(),
         newContactEntries: [], ambiguousContactEntries: [],
@@ -699,8 +688,7 @@ async function main() {
   row('Since timestamp:',              lastSyncTimestamp || '(initial sync)');
   row('Guests found in Oracle:',        String(totalRaw));
   console.log('');
-  row('  Filtered (agent/proxy):',      String(allFiltered.length));
-  row('  Invalid email:',               String(allInvalid.length));
+  row('  Front desk (email needed):',   String(allFrontDesk.length));
   row('  Shared-email conflict:',       `${batchConflictEntries.length} entries → needsReview`);
   row('  Ambiguous SF Contacts:',       `${ambiguousContactEntries.length} entries → needsReview`);
   console.log('');
@@ -727,7 +715,7 @@ async function main() {
   if (SEND_EMAIL) {
     const report = {
       runAt: now, lastSyncTimestamp, lastSyncStatus, lastSyncRecordCount,
-      totalRaw, filtered: allFiltered.length, invalid: allInvalid.length,
+      totalRaw, frontDesk: allFrontDesk.length,
       eligible: allRecords.length,
       emailGroups, batchConflictEmails, batchConflictEntries,
       newContacts: newEmailSet.size,

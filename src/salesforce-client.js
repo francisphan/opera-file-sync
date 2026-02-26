@@ -199,7 +199,7 @@ class SalesforceClient {
     }
 
     // --- Pre-flight: within-batch conflict detection ---
-    // Group entries by email; if same email has 2+ distinct names → flag all and exclude
+    // Group entries by email; identify groups with 2+ distinct names (shared-email groups)
     const emailGroups = new Map();
     for (const entry of guestDataList) {
       const email = (entry.customer.email || '').toLowerCase();
@@ -208,7 +208,7 @@ class SalesforceClient {
       emailGroups.get(email).push(entry);
     }
 
-    const batchConflictEmails = new Set();
+    const sharedEmailGroups = new Map(); // email → entries[] (only groups with 2+ distinct names)
     for (const [email, entries] of emailGroups) {
       if (entries.length < 2) continue;
       const names = new Set(
@@ -217,29 +217,25 @@ class SalesforceClient {
         )
       );
       if (names.size > 1) {
-        batchConflictEmails.add(email);
-        const nameList = [...names].join(', ');
-        logger.warn(`Shared email in batch: "${email}" has ${names.size} distinct names (${nameList}) — all flagged for review`);
-        for (const entry of entries) {
-          flagNeedsReview(entry, 'shared-email-in-batch', `Names in batch: ${nameList}`);
-        }
+        sharedEmailGroups.set(email, entries);
+        logger.info(`Shared email detected: "${email}" has ${names.size} distinct names — will resolve after SF lookup`);
       }
     }
 
-    // Eligible entries: have an email and are not batch-conflicted
-    const eligibleEntries = guestDataList.filter(entry => {
+    // All entries with an email are eligible for Phase 1 lookup (including shared-email)
+    const allWithEmail = guestDataList.filter(entry => {
       const email = (entry.customer.email || '').toLowerCase();
-      return email && !batchConflictEmails.has(email);
+      return !!email;
     });
 
     // Unique emails for SF lookup
     const uniqueEmailsSet = new Set();
-    for (const entry of eligibleEntries) {
+    for (const entry of allWithEmail) {
       uniqueEmailsSet.add((entry.customer.email || '').toLowerCase());
     }
     const uniqueEmails = [...uniqueEmailsSet];
 
-    // emailStatus: email → { status: 'new'|'exists'|'ambiguous', contactId? }
+    // emailStatus: email → { status: 'new'|'exists'|'ambiguous', contactId?, sfFirstName?, sfLastName? }
     const emailStatus = new Map();
     for (const email of uniqueEmails) {
       emailStatus.set(email, { status: 'new' });
@@ -251,7 +247,7 @@ class SalesforceClient {
     for (let i = 0; i < uniqueEmails.length; i += batchSize) {
       const emailBatch = uniqueEmails.slice(i, i + batchSize);
       const escaped = emailBatch.map(e => `'${e.replace(/'/g, "\\'")}'`).join(',');
-      const query = `SELECT Id, Email FROM Contact WHERE Email IN (${escaped})`;
+      const query = `SELECT Id, Email, FirstName, LastName FROM Contact WHERE Email IN (${escaped})`;
 
       // Re-throw on query failure — infra-level problem, don't continue silently
       const result = await this.connection.query(query);
@@ -261,17 +257,75 @@ class SalesforceClient {
       for (const rec of result.records) {
         const email = rec.Email.toLowerCase();
         if (!sfByEmail.has(email)) sfByEmail.set(email, []);
-        sfByEmail.get(email).push(rec.Id);
+        sfByEmail.get(email).push({ id: rec.Id, firstName: rec.FirstName || '', lastName: rec.LastName || '' });
       }
 
-      for (const [email, ids] of sfByEmail) {
-        if (ids.length === 1) {
-          emailStatus.set(email, { status: 'exists', contactId: ids[0] });
+      for (const [email, contacts] of sfByEmail) {
+        if (contacts.length === 1) {
+          emailStatus.set(email, {
+            status: 'exists',
+            contactId: contacts[0].id,
+            sfFirstName: contacts[0].firstName,
+            sfLastName: contacts[0].lastName
+          });
         } else {
           emailStatus.set(email, { status: 'ambiguous' });
         }
       }
     }
+
+    // --- Shared-email resolution (after Phase 1) ---
+    const excludedEntries = new Set();
+
+    for (const [email, entries] of sharedEmailGroups) {
+      const status = emailStatus.get(email);
+      if (!status) continue;
+
+      if (status.status === 'exists') {
+        // Try to match one Opera entry's name against the SF Contact name
+        const sfFirst = (status.sfFirstName || '').toLowerCase();
+        const sfLast = (status.sfLastName || '').toLowerCase();
+        let matchedEntry = null;
+
+        for (const entry of entries) {
+          const opFirst = (entry.customer.firstName || '').toLowerCase();
+          const opLast = (entry.customer.lastName || '').toLowerCase();
+          if (opFirst === sfFirst && opLast === sfLast) {
+            matchedEntry = entry;
+            break;
+          }
+        }
+
+        if (matchedEntry) {
+          // Owner found — exclude non-matching entries
+          logger.info(`Shared email "${email}": resolved to ${matchedEntry.customer.firstName} ${matchedEntry.customer.lastName} (matches SF Contact)`);
+          for (const entry of entries) {
+            if (entry !== matchedEntry) {
+              excludedEntries.add(entry);
+            }
+          }
+        } else {
+          // No name match — flag all for review
+          const nameList = entries.map(e => `${e.customer.firstName} ${e.customer.lastName}`).join(', ');
+          logger.warn(`Shared email "${email}": no name matches SF Contact (${status.sfFirstName} ${status.sfLastName}) — all flagged for review`);
+          for (const entry of entries) {
+            flagNeedsReview(entry, 'shared-email-no-name-match',
+              `SF Contact: ${status.sfFirstName} ${status.sfLastName}; Opera names: ${nameList}`);
+          }
+        }
+      } else if (status.status === 'new') {
+        // New email with shared names — flag all for review
+        const nameList = entries.map(e => `${e.customer.firstName} ${e.customer.lastName}`).join(', ');
+        logger.warn(`Shared email "${email}": new contact with ${entries.length} distinct names — all flagged for review`);
+        for (const entry of entries) {
+          flagNeedsReview(entry, 'shared-email-new-contact', `Opera names: ${nameList}`);
+        }
+      }
+      // status === 'ambiguous' is handled below with the general ambiguous logic
+    }
+
+    // Build eligible entries: have email, not excluded by shared-email resolution
+    const eligibleEntries = allWithEmail.filter(entry => !excludedEntries.has(entry));
 
     // Flag ambiguous emails for needsReview (one entry per eligible entry with that email)
     for (const entry of eligibleEntries) {
@@ -369,6 +423,8 @@ class SalesforceClient {
     const seenGuestKeys = new Set();
 
     for (const entry of guestDataList) {
+      if (excludedEntries.has(entry)) continue;
+
       const email = (entry.customer.email || '').toLowerCase();
       if (!email) continue;
 

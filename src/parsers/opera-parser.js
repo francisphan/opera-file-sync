@@ -137,61 +137,63 @@ async function parseOPERAFiles(customersFile, invoicesFile = null) {
     logger.warn(`Invoices file not found: ${invoicesFile}`);
   }
 
-  // Join customers with invoices and transform, filtering out agent emails
+  // Join customers with invoices and transform, filtering out agent/invalid emails
   const records = [];
-  const filtered = [];
-  const invalid = [];
+  const frontDesk = [];
+  const todayArg = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
+
   for (const [operaId, customer] of customers) {
+    const invoice = convertInvoiceDates(invoices.get(operaId));
+    const checkInDate = invoice && invoice.checkIn;
+    const checkOutDate = invoice && invoice.checkOut;
+    const isCheckingInToday = checkInDate === todayArg;
+
     // Skip records without email (required for upsert)
     if (!customer.email || !customer.email.includes('@')) {
-      logger.debug(`Skipping customer ${operaId} - no valid email`);
-      invalid.push({
-        email: customer.email || '',
-        firstName: customer.firstName,
-        lastName: customer.lastName,
-        operaId: customer.operaId,
-        reason: 'invalid-email'
-      });
+      // Checking in today → front desk list; otherwise → skip silently
+      if (isCheckingInToday) {
+        logger.debug(`Front desk: customer ${operaId} - no valid email (checking in today)`);
+        frontDesk.push({
+          email: customer.email || '',
+          firstName: customer.firstName,
+          lastName: customer.lastName,
+          operaId: customer.operaId,
+          reason: 'invalid-email',
+          checkIn: (invoice && invoice.checkIn) || '',
+          checkOut: checkOutDate || ''
+        });
+      }
       continue;
     }
 
     // Check if this looks like a travel agent / non-guest
     const agentCategory = isAgentEmail(customer);
     if (agentCategory) {
-      // Look up invoice to check if guest has already checked out
-      const agentInvoice = convertInvoiceDates(invoices.get(operaId));
-      const checkOutDate = agentInvoice && agentInvoice.checkOut;
-      const todayArg = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
-
-      // Skip silently if already checked out — can't get a real email anymore
-      if (checkOutDate && checkOutDate < todayArg) {
+      // Only flag for front desk if checking in today
+      if (!isCheckingInToday) {
         continue;
       }
 
-      filtered.push({
+      frontDesk.push({
         email: customer.email,
         firstName: customer.firstName,
         lastName: customer.lastName,
         operaId: customer.operaId,
-        category: agentCategory,
-        checkIn: (agentInvoice && agentInvoice.checkIn) || '',
+        reason: agentCategory,
+        checkIn: (invoice && invoice.checkIn) || '',
         checkOut: checkOutDate || ''
       });
       continue;
     }
 
-    const invoice = convertInvoiceDates(invoices.get(operaId));
     records.push({ customer, invoice });
   }
 
-  if (filtered.length > 0) {
-    logger.info(`Filtered ${filtered.length} agent/company emails`);
-  }
-  if (invalid.length > 0) {
-    logger.info(`Skipped ${invalid.length} guests with invalid/missing emails`);
+  if (frontDesk.length > 0) {
+    logger.info(`Front desk: ${frontDesk.length} on-property guests need email collection`);
   }
   logger.info(`Transformed ${records.length} guest records for Salesforce`);
-  return { records, filtered, invalid };
+  return { records, frontDesk };
 }
 
 /**

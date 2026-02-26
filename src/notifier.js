@@ -45,6 +45,8 @@ class Notifier {
       this.emailTo = process.env.EMAIL_TO;
     }
 
+    this.frontDeskEmailTo = process.env.FRONT_DESK_EMAIL_TO || null;
+
     // Slack configuration
     this.slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
 
@@ -120,26 +122,47 @@ class Notifier {
   }
 
   /**
-   * Send email notification
+   * Send email notification (to default admin recipients)
    */
   async sendEmail(subject, textBody, htmlBody) {
+    return this._sendEmailToRecipients(this.emailTo, subject, textBody, htmlBody);
+  }
+
+  /**
+   * Send email to specific recipients with optional attachments
+   * @param {string} to - Comma-separated email addresses
+   * @param {string} subject - Email subject
+   * @param {string} textBody - Plain text body
+   * @param {string} htmlBody - HTML body
+   * @param {Array} attachments - Array of { filename, content, contentType } objects
+   */
+  async _sendEmailToRecipients(to, subject, textBody, htmlBody, attachments = []) {
     if (!this.emailEnabled) {
       return;
     }
 
     try {
       if (this.useGmailAPI) {
-        return await this._sendViaGmailREST(subject, textBody, htmlBody);
+        return await this._sendViaGmailREST(to, subject, textBody, htmlBody, attachments);
       }
 
-      const info = await this.transporter.sendMail({
+      const mailOptions = {
         from: this.emailFrom,
-        to: this.emailTo,
+        to: to,
         subject: subject,
         text: textBody,
         html: htmlBody
-      });
+      };
 
+      if (attachments.length > 0) {
+        mailOptions.attachments = attachments.map(a => ({
+          filename: a.filename,
+          content: a.content,
+          contentType: a.contentType
+        }));
+      }
+
+      const info = await this.transporter.sendMail(mailOptions);
       logger.debug(`Email sent: ${info.messageId}`);
       return true;
     } catch (err) {
@@ -151,7 +174,7 @@ class Notifier {
   /**
    * Send email via Gmail REST API (bypasses SMTP entirely, works in pkg bundles)
    */
-  async _sendViaGmailREST(subject, textBody, htmlBody) {
+  async _sendViaGmailREST(to, subject, textBody, htmlBody, attachments = []) {
     // Get access token
     const tokenRes = await axios.post('https://oauth2.googleapis.com/token', {
       client_id: this.gmailClientId,
@@ -165,16 +188,50 @@ class Notifier {
     // Encode subject line for UTF-8 (RFC 2047) to handle emojis correctly
     const encodedSubject = `=?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`;
 
-    // Build MIME message
-    const message = [
-      `From: ${this.emailFrom}`,
-      `To: ${this.emailTo}`,
-      `Subject: ${encodedSubject}`,
-      'MIME-Version: 1.0',
-      'Content-Type: text/html; charset=utf-8',
-      '',
-      htmlBody || textBody
-    ].join('\r\n');
+    let message;
+
+    if (attachments.length > 0) {
+      // Build multipart/mixed MIME message with attachments
+      const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const parts = [
+        `From: ${this.emailFrom}`,
+        `To: ${to}`,
+        `Subject: ${encodedSubject}`,
+        'MIME-Version: 1.0',
+        `Content-Type: multipart/mixed; boundary="${boundary}"`,
+        '',
+        `--${boundary}`,
+        'Content-Type: text/html; charset=utf-8',
+        '',
+        htmlBody || textBody
+      ];
+
+      for (const att of attachments) {
+        const b64Content = Buffer.from(att.content).toString('base64');
+        parts.push(
+          `--${boundary}`,
+          `Content-Type: ${att.contentType || 'application/octet-stream'}; name="${att.filename}"`,
+          `Content-Disposition: attachment; filename="${att.filename}"`,
+          'Content-Transfer-Encoding: base64',
+          '',
+          b64Content
+        );
+      }
+
+      parts.push(`--${boundary}--`);
+      message = parts.join('\r\n');
+    } else {
+      // Simple HTML message (no attachments)
+      message = [
+        `From: ${this.emailFrom}`,
+        `To: ${to}`,
+        `Subject: ${encodedSubject}`,
+        'MIME-Version: 1.0',
+        'Content-Type: text/html; charset=utf-8',
+        '',
+        htmlBody || textBody
+      ].join('\r\n');
+    }
 
     // Base64url encode
     const encoded = Buffer.from(message)
@@ -254,24 +311,79 @@ class Notifier {
   }
 
   /**
-   * Notify about filtered agent/non-guest emails
-   * Note: Email skipped for per-sync events — filtered stats go in the daily summary.
+   * Send front desk report email listing on-property guests needing email collection
+   * @param {Object} stats - Daily stats object with frontDeskDetails
    */
-  async notifyFilteredAgents(filename, filteredRecords) {
-    if (filteredRecords.length === 0) {
-      return;
-    }
+  async sendFrontDeskReport(stats) {
+    if (!this.frontDeskEmailTo) return;
 
-    const count = filteredRecords.length;
-    logger.info(`Filtered ${count} agent/company emails from ${filename}`);
+    const details = stats.frontDeskDetails || [];
+    if (details.length === 0) return;
 
-    if (this.slackEnabled) {
-      const slackLines = filteredRecords.slice(0, 10).map(r =>
-        `  ${r.email} — ${r.firstName} ${r.lastName} (${r.category})`
-      ).join('\n');
-      const more = count > 10 ? `\n  _...and ${count - 10} more_` : '';
-      await this.sendSlackMessage(`:mag: *OPERA Sync - Filtered ${count} Agent Emails*\nFile: \`${filename}\`\n\`\`\`${slackLines}${more}\`\`\`\n_See daily summary for details_`);
-    }
+    const subject = `Front Desk — ${details.length} Guest(s) Need Email Collection (${stats.date})`;
+
+    const textBody = details.map(r =>
+      `${r.firstName} ${r.lastName} — ${r.email || '(none)'} — ${r.reason} — check-in: ${r.checkIn || '—'} check-out: ${r.checkOut || '—'}`
+    ).join('\n');
+
+    const htmlBody = `
+      <h2>Front Desk — Guests Needing Email Collection</h2>
+      <p><strong>Date:</strong> ${stats.date} | <strong>Count:</strong> ${details.length}</p>
+      <table style="border-collapse:collapse;width:100%;font-size:13px;margin-bottom:16px">
+        <tr style="background:#e3f2fd">
+          <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Guest Name</th>
+          <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Current Email</th>
+          <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Reason</th>
+          <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-in</th>
+          <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-out</th>
+        </tr>
+        ${details.map(r => `
+        <tr>
+          <td style="padding:6px 10px;border:1px solid #ddd">${r.firstName} ${r.lastName}</td>
+          <td style="padding:6px 10px;border:1px solid #ddd">${r.email || ''}</td>
+          <td style="padding:6px 10px;border:1px solid #ddd">${r.reason || ''}</td>
+          <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkIn || ''}</td>
+          <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkOut || ''}</td>
+        </tr>`).join('')}
+      </table>
+      <p style="color:#666;font-size:12px">Please collect personal email addresses for these guests during their stay.</p>
+    `;
+
+    await this._sendEmailToRecipients(this.frontDeskEmailTo, subject, textBody, htmlBody);
+    logger.info(`Front desk report sent to ${this.frontDeskEmailTo}: ${details.length} guests`);
+  }
+
+  /**
+   * Build CSV string for needs-review records (ready for SF Data Loader)
+   * @param {Array} reviewDetails - Array of needsReview objects
+   * @returns {string} CSV content
+   */
+  _buildNeedsReviewCSV(reviewDetails) {
+    const headers = ['Email', 'FirstName', 'LastName', 'Phone', 'City__c', 'State_Province__c', 'Country__c', 'Language__c', 'Check_In_Date__c', 'Check_Out_Date__c', 'Review_Reason'];
+
+    const escapeCSV = (val) => {
+      const str = String(val || '');
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const rows = reviewDetails.map(r => [
+      r.email || '',
+      r.firstName || '',
+      r.lastName || '',
+      r.phone || '',
+      r.billingCity || '',
+      r.billingState || '',
+      r.billingCountry || '',
+      mapLanguageToSalesforce(r.language) || '',
+      r.checkInDate || '',
+      r.checkOutDate || '',
+      r.reason || ''
+    ].map(escapeCSV).join(','));
+
+    return [headers.join(','), ...rows].join('\n');
   }
 
   /**
@@ -533,22 +645,9 @@ No action required - the system is operating normally.
   async sendDailySummary(stats) {
     const subject = `📊 OPERA Sync - Daily Summary (${stats.date})`;
 
-    const totalSkipped = (stats.skippedAgents || 0) + (stats.skippedDuplicates || 0) + (stats.skippedInvalid || 0);
-
-    const agentDetails = stats.skippedAgentDetails || [];
-    const invalidDetails = stats.skippedInvalidDetails || [];
     const duplicateDetails = stats.skippedDuplicateDetails || [];
     const reviewDetails = stats.needsReviewDetails || [];
-
-    const formatDetailList = (items) =>
-      items.map(r => {
-        let line = `  - ${r.firstName} ${r.lastName} <${r.email}>`;
-        if (r.category) line += ` (${r.category})`;
-        else if (r.reason) line += ` (${r.reason})`;
-        if (r.checkIn) line += ` check-in: ${r.checkIn}`;
-        if (r.checkOut) line += ` check-out: ${r.checkOut}`;
-        return line;
-      }).join('\n');
+    const frontDeskDetails = stats.frontDeskDetails || [];
 
     const textBody = `
 OPERA to Salesforce Sync - Daily Summary
@@ -558,15 +657,13 @@ Date: ${stats.date}
 
 TODAY'S ACTIVITY:
 Records Synced: ${stats.recordsSynced || 0}
-Skipped (Agents/Companies): ${stats.skippedAgents || 0}
+Front Desk (email collection): ${stats.frontDesk || 0}
 Skipped (Duplicates): ${stats.skippedDuplicates || 0}
-Skipped (Invalid/No Email): ${stats.skippedInvalid || 0}
 Needs Review: ${stats.needsReview || 0}
 Errors: ${stats.errors || 0}
 
-${agentDetails.length > 0 ? `\nSKIPPED - AGENTS/COMPANIES STILL CHECKED IN (please review):\n${formatDetailList(agentDetails)}` : ''}
-${duplicateDetails.length > 0 ? `\nSKIPPED - DUPLICATES (please review):\n${formatDetailList(duplicateDetails)}` : ''}
-${invalidDetails.length > 0 ? `\nSKIPPED - INVALID/NO EMAIL (please review):\n${formatDetailList(invalidDetails)}` : ''}
+${frontDeskDetails.length > 0 ? `\nFRONT DESK — ON-PROPERTY GUESTS (email collection needed):\n${frontDeskDetails.map(r => `  - ${r.firstName} ${r.lastName} <${r.email || '(none)'}> (${r.reason}) check-in: ${r.checkIn || '—'} check-out: ${r.checkOut || '—'}`).join('\n')}` : ''}
+${duplicateDetails.length > 0 ? `\nSKIPPED - DUPLICATES (please review):\n${duplicateDetails.map(r => `  - ${r.firstName} ${r.lastName} <${r.email}> (${r.reason || r.category || ''})`).join('\n')}` : ''}
 ${reviewDetails.length > 0 ? `\nNEEDS REVIEW (manual entry required):\n${reviewDetails.map(r => `  - ${r.firstName} ${r.lastName} <${r.email}> (${r.reason}) check-in: ${r.checkInDate || '—'}`).join('\n')}` : ''}
 ${stats.errors > 0 ? `\nRECENT ERRORS:\n${(stats.errorDetails || []).map(e => `- [${new Date(e.time).toLocaleTimeString()}] ${e.message}`).join('\n')}` : ''}
 
@@ -585,17 +682,14 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
           <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Records Synced to Salesforce</td>
           <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold; color: green; font-size: 16px;">${stats.recordsSynced || 0}</td>
         </tr>
-        <tr style="background: #fff3e0;">
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Skipped (Agents/Companies)</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${stats.skippedAgents || 0}</td>
-        </tr>
+        ${(stats.frontDesk || 0) > 0 ? `
+        <tr style="background: #e3f2fd;">
+          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Front Desk (email collection)</td>
+          <td style="padding: 8px; border: 1px solid #ddd;">${stats.frontDesk}</td>
+        </tr>` : ''}
         <tr style="background: #fff3e0;">
           <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Skipped (Duplicates)</td>
           <td style="padding: 8px; border: 1px solid #ddd;">${stats.skippedDuplicates || 0}</td>
-        </tr>
-        <tr style="background: #fff3e0;">
-          <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Skipped (Invalid/No Email)</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${stats.skippedInvalid || 0}</td>
         </tr>
         ${(stats.needsReview || 0) > 0 ? `
         <tr style="background: #fffbeb;">
@@ -608,23 +702,23 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
         </tr>
       </table>
 
-      ${agentDetails.length > 0 ? `
-        <h3>⚠️ Skipped — Agents/Companies still checked in (please review)</h3>
-        <table style="border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 16px;">
-          <tr style="background: #fff3e0;">
-            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Name</th>
-            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Email</th>
-            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Reason</th>
-            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;white-space:nowrap">Check-in</th>
-            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;white-space:nowrap">Check-out</th>
+      ${frontDeskDetails.length > 0 ? `
+        <h3>📋 Front Desk — On-Property Guests (email collection needed)</h3>
+        <table style="border-collapse:collapse;width:100%;font-size:12px;margin-bottom:16px">
+          <tr style="background:#e3f2fd">
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Name</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Current Email</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Reason</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-in</th>
+            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-out</th>
           </tr>
-          ${agentDetails.map(r => `
+          ${frontDeskDetails.map(r => `
           <tr>
-            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.firstName} ${r.lastName}</td>
-            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.email}</td>
-            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.category || ''}</td>
-            <td style="padding: 6px 10px; border: 1px solid #ddd;white-space:nowrap">${r.checkIn || ''}</td>
-            <td style="padding: 6px 10px; border: 1px solid #ddd;white-space:nowrap">${r.checkOut || ''}</td>
+            <td style="padding:6px 10px;border:1px solid #ddd">${r.firstName} ${r.lastName}</td>
+            <td style="padding:6px 10px;border:1px solid #ddd">${r.email || ''}</td>
+            <td style="padding:6px 10px;border:1px solid #ddd">${r.reason || ''}</td>
+            <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkIn || ''}</td>
+            <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkOut || ''}</td>
           </tr>`).join('')}
         </table>
       ` : ''}
@@ -648,25 +742,6 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
         </table>
       ` : ''}
 
-      ${invalidDetails.length > 0 ? `
-        <h3>⚠️ Skipped — Invalid/No Email (please review)</h3>
-        <table style="border-collapse: collapse; width: 100%; font-size: 12px; margin-bottom: 16px;">
-          <tr style="background: #fff3e0;">
-            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Name</th>
-            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Email (raw)</th>
-            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Reason</th>
-            <th style="padding: 6px 10px; border: 1px solid #ddd; text-align: left;">Opera ID</th>
-          </tr>
-          ${invalidDetails.map(r => `
-          <tr>
-            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.firstName} ${r.lastName}</td>
-            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.email}</td>
-            <td style="padding: 6px 10px; border: 1px solid #ddd;">${r.reason || ''}</td>
-            <td style="padding: 6px 10px; border: 1px solid #ddd; color: #999;">${r.operaId || ''}</td>
-          </tr>`).join('')}
-        </table>
-      ` : ''}
-
       ${reviewDetails.length > 0 ? `
         <h3>⚠️ Needs Review — Manual Entry Required (${reviewDetails.length})</h3>
         <div style="overflow-x:auto">
@@ -685,7 +760,11 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
           ${reviewDetails.map(r => {
             const name = `${r.firstName || ''} ${r.lastName || ''}`.trim();
             const lang = mapLanguageToSalesforce(r.language) || '';
-            const reason = r.reason === 'shared-email-in-batch' ? 'Shared email' : r.reason === 'multiple-sf-contacts' ? '2+ SF Contacts' : r.reason;
+            const reason = r.reason === 'shared-email-in-batch' ? 'Shared email'
+              : r.reason === 'shared-email-no-name-match' ? 'Shared email (no match)'
+              : r.reason === 'shared-email-new-contact' ? 'Shared email (new)'
+              : r.reason === 'multiple-sf-contacts' ? '2+ SF Contacts'
+              : r.reason;
             return `<tr>
               <td style="padding:6px 10px;border:1px solid #ddd">${name}</td>
               <td style="padding:6px 10px;border:1px solid #ddd">${r.email || ''}</td>
@@ -700,6 +779,7 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
           }).join('')}
         </table>
         </div>
+        <p style="font-size:12px;color:#666">A CSV file is attached for SF Data Loader import.</p>
       ` : ''}
 
       ${stats.errors > 0 ? `
@@ -733,7 +813,18 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
     `;
 
     if (this.emailEnabled) {
-      await this.sendEmail(subject, textBody, htmlBody);
+      // Build CSV attachment for needs-review records
+      const attachments = [];
+      if (reviewDetails.length > 0) {
+        const csvContent = this._buildNeedsReviewCSV(reviewDetails);
+        attachments.push({
+          filename: `needs-review-${stats.date}.csv`,
+          content: csvContent,
+          contentType: 'text/csv'
+        });
+      }
+
+      await this._sendEmailToRecipients(this.emailTo, subject, textBody, htmlBody, attachments);
     }
 
     if (this.slackWebhookUrl) {
@@ -751,10 +842,9 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
             type: 'section',
             fields: [
               { type: 'mrkdwn', text: `*Records Synced:*\n${stats.recordsSynced || 0}` },
-              { type: 'mrkdwn', text: `*Total Skipped:*\n${totalSkipped}` },
-              { type: 'mrkdwn', text: `*Skipped (Agents):*\n${stats.skippedAgents || 0}` },
+              { type: 'mrkdwn', text: `*Front Desk:*\n${stats.frontDesk || 0}` },
               { type: 'mrkdwn', text: `*Skipped (Duplicates):*\n${stats.skippedDuplicates || 0}` },
-              { type: 'mrkdwn', text: `*Skipped (Invalid):*\n${stats.skippedInvalid || 0}` },
+              { type: 'mrkdwn', text: `*Needs Review:*\n${stats.needsReview || 0}` },
               { type: 'mrkdwn', text: `*Errors:*\n${stats.errors || 0}` }
             ]
           }
