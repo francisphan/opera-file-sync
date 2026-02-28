@@ -43,8 +43,11 @@ const oauth2Client = new google.auth.OAuth2(
   CONFIG.REDIRECT_URI
 );
 
-// Scopes for Gmail send
-const SCOPES = ['https://www.googleapis.com/auth/gmail.send'];
+// Scopes for Gmail send + Google Sheets read/write
+const SCOPES = [
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/spreadsheets',
+];
 
 app.get('/oauth/callback', async (req, res) => {
   const { code, error } = req.query;
