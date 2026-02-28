@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * Gmail OAuth Token Generator
- * Generates OAuth tokens for sending email via Gmail API
+ * Google OAuth Token Generator
+ * Generates OAuth tokens for Gmail send + Google Sheets read/write
  */
 
+require('dotenv').config();
 const { google } = require('googleapis');
 const express = require('express');
 const open = require('open');
