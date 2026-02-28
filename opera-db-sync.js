@@ -17,6 +17,7 @@ const Notifier = require('./src/notifier');
 const DailyStats = require('./src/daily-stats');
 const { setupDailySummary, setupFrontDeskReport } = require('./src/scheduler');
 const { queryGuestsSince } = require('./src/opera-db-query');
+const SheetsClient = require('./src/sheets-client');
 
 // Configuration
 const CONFIG = {
@@ -44,6 +45,7 @@ let oracleClient;
 let syncState;
 let notifier;
 let dailyStats;
+let sheetsClient;
 let pollTimer = null;
 let isPolling = false;
 
@@ -66,6 +68,7 @@ async function initialize() {
   syncState = new SyncState();
   notifier = new Notifier();
   dailyStats = new DailyStats();
+  sheetsClient = new SheetsClient();
 
   // Connect to Salesforce
   sfClient = new SalesforceClient(CONFIG.salesforce);
@@ -167,6 +170,17 @@ async function poll() {
 
     if (results.needsReview && results.needsReview.length > 0) {
       dailyStats.addNeedsReview(results.needsReview.length, results.needsReview);
+    }
+
+    // Append today's checkouts to the Google Sheet for survey emails (no backfilling)
+    const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
+    const checkedOut = records.filter(r => r.invoice && r.invoice.checkOut === today);
+    if (checkedOut.length > 0) {
+      try {
+        await sheetsClient.appendCheckedOutGuests(checkedOut);
+      } catch (err) {
+        logger.error('Sheets append failed (non-fatal):', err.message);
+      }
     }
 
     await notifier.notifyFileProcessed('db-poll', results.success, frontDesk.length);

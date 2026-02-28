@@ -24,6 +24,7 @@ const OracleClient      = require('../src/oracle-client');
 const { queryGuestsSince } = require('../src/opera-db-query');
 const { transformToTVRSGuest, GUEST_DIFF_SOQL_FIELDS, diffGuestRecord, mapLanguageToSalesforce } = require('../src/guest-utils');
 const Notifier = require('../src/notifier');
+const SheetsClient = require('../src/sheets-client');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -708,9 +709,97 @@ async function main() {
   if (!VERBOSE && (newEmailSet.size + guestsToCreate.length + guestsToUpdate.length + totalNeedsReview) > 0) {
     console.log('  Re-run with --verbose to see individual guest rows per category.');
   }
-  console.log(hr() + '\n');
+  console.log(hr());
 
-  // ── 7. Email report (optional) ────────────────────────────────────────────
+  // ── 7. Google Sheets Preview ───────────────────────────────────────────────
+
+  section('Google Sheets — Checkout Survey Preview');
+
+  const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
+  const checkedOutToday = allRecords.filter(r =>
+    r.invoice && r.invoice.checkOut === today
+  );
+
+  row('Today (ART):',                   today);
+  row('Checked-out guests (today):',    String(checkedOutToday.length));
+
+  if (checkedOutToday.length === 0) {
+    console.log('\n  No checked-out guests today — nothing would be added to the sheet.');
+  } else {
+    // Sort by checkout date (all same today, but keeps consistent with live code)
+    checkedOutToday.sort((a, b) => (a.invoice.checkOut || '').localeCompare(b.invoice.checkOut || ''));
+
+    const sheetsClient = new SheetsClient();
+
+    if (sheetsClient.enabled) {
+      // Check for duplicates against the actual sheet
+      const tabName = sheetsClient._getTabName(today);
+      row('Target tab:',                  tabName);
+
+      let existingKeys = new Set();
+      try {
+        existingKeys = await sheetsClient._getExistingKeys(tabName);
+        row('Existing rows in tab:',       String(existingKeys.size));
+      } catch (err) {
+        console.warn(`  WARNING: Could not read sheet tab "${tabName}": ${err.message}`);
+        console.warn('  (tab may not exist yet — it will be created on the first live run)');
+      }
+
+      const wouldAdd = [];
+      const wouldSkip = [];
+      for (const record of checkedOutToday) {
+        const key = `${record.customer.email.toLowerCase()}|${sheetsClient._formatDate(record.invoice.checkOut)}`;
+        if (existingKeys.has(key)) {
+          wouldSkip.push(record);
+        } else {
+          wouldAdd.push(record);
+        }
+      }
+
+      row('Would ADD to sheet:',           String(wouldAdd.length));
+      row('Would SKIP (already in sheet):', String(wouldSkip.length));
+
+      if (wouldAdd.length > 0) {
+        console.log('\n    Rows that would be appended:');
+        console.log('    ' + '-'.repeat(100));
+        console.log(`    ${'Name'.padEnd(28)}${'Email'.padEnd(34)}${'Arrival'.padEnd(12)}${'Departure'.padEnd(12)}Language`);
+        console.log('    ' + '-'.repeat(100));
+        for (const r of wouldAdd) {
+          const name = `${r.customer.firstName} ${r.customer.lastName}`.padEnd(28);
+          const email = r.customer.email.padEnd(34);
+          const arrival = sheetsClient._formatDate(r.invoice.checkIn).padEnd(12);
+          const departure = sheetsClient._formatDate(r.invoice.checkOut).padEnd(12);
+          const lang = mapLanguageToSalesforce(r.customer.language);
+          console.log(`    ${name}${email}${arrival}${departure}${lang}`);
+        }
+      }
+
+      if (wouldSkip.length > 0 && VERBOSE) {
+        console.log('\n    Already in sheet (would skip):');
+        for (const r of wouldSkip) {
+          console.log(`      · ${r.customer.firstName} ${r.customer.lastName} <${r.customer.email}>`);
+        }
+      }
+    } else {
+      console.log('\n  GOOGLE_SHEETS_ENABLED is not true — showing what would qualify:\n');
+      console.log('    ' + '-'.repeat(100));
+      console.log(`    ${'Name'.padEnd(28)}${'Email'.padEnd(34)}${'Arrival'.padEnd(12)}${'Departure'.padEnd(12)}Language`);
+      console.log('    ' + '-'.repeat(100));
+      for (const r of checkedOutToday) {
+        const name = `${r.customer.firstName} ${r.customer.lastName}`.padEnd(28);
+        const email = r.customer.email.padEnd(34);
+        const arrival = (r.invoice.checkIn || '').padEnd(12);
+        const departure = (r.invoice.checkOut || '').padEnd(12);
+        const lang = mapLanguageToSalesforce(r.customer.language);
+        console.log(`    ${name}${email}${arrival}${departure}${lang}`);
+      }
+      console.log('\n  (dedup check skipped — set GOOGLE_SHEETS_ENABLED=true and GOOGLE_SHEETS_ID to check against the sheet)');
+    }
+  }
+
+  console.log('');
+
+  // ── 8. Email report (optional) ────────────────────────────────────────────
 
   if (SEND_EMAIL) {
     const report = {

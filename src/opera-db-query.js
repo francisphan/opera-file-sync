@@ -145,7 +145,8 @@ async function queryGuestsByIds(oracleClient, nameIds) {
 
       const invoice = (row.CHECK_IN || row.CHECK_OUT) ? {
         checkIn: formatDate(row.CHECK_IN),
-        checkOut: formatDate(row.CHECK_OUT)
+        checkOut: formatDate(row.CHECK_OUT),
+        resvStatus: row.RESV_STATUS || ''
       } : null;
 
       if (!invoice) {
