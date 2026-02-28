@@ -79,8 +79,14 @@ async function queryGuestsByIds(oracleClient, nameIds) {
     `, binds);
 
     for (const row of rows) {
-      // Sanitize email (fix typos, transliterate international chars)
+      // Skip staff/company emails entirely — not guests
       const rawEmail = (row.EMAIL || '').trim();
+      const emailLower = rawEmail.toLowerCase();
+      if (emailLower.endsWith('@vinesofmendoza.com') || emailLower.endsWith('@the-vines.com')) {
+        continue;
+      }
+
+      // Sanitize email (fix typos, transliterate international chars)
       const cleanedEmail = sanitizeEmail(rawEmail);
 
       if (!cleanedEmail) {

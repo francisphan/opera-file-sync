@@ -143,6 +143,12 @@ async function parseOPERAFiles(customersFile, invoicesFile = null) {
   const todayArg = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
 
   for (const [operaId, customer] of customers) {
+    // Skip staff/company emails entirely — not guests
+    const emailLower = (customer.email || '').toLowerCase();
+    if (emailLower.endsWith('@vinesofmendoza.com') || emailLower.endsWith('@the-vines.com')) {
+      continue;
+    }
+
     const invoice = convertInvoiceDates(invoices.get(operaId));
     const checkInDate = invoice && invoice.checkIn;
     const checkOutDate = invoice && invoice.checkOut;
