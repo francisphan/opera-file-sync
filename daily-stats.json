@@ -1,9 +1,16 @@
 {
-  "date": "2026-02-17",
+  "date": "2026-02-28",
   "uploaded": 0,
-  "skippedAgents": 381,
+  "skippedAgents": 0,
   "skippedDuplicates": 0,
   "skippedInvalid": 0,
+  "frontDesk": 0,
   "errors": 0,
-  "errorDetails": []
+  "needsReview": 0,
+  "errorDetails": [],
+  "skippedAgentDetails": [],
+  "skippedInvalidDetails": [],
+  "skippedDuplicateDetails": [],
+  "frontDeskDetails": [],
+  "needsReviewDetails": []
 }

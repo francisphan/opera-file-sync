@@ -127,24 +127,45 @@ class DailyStats {
    */
   addFrontDesk(count, details = []) {
     this.checkDateRollover();
-    this.stats.frontDesk += count;
-    this.stats.frontDeskDetails.push(...details);
+    // Deduplicate by name + checkInDate to prevent inflated counts
+    const existing = new Set(
+      this.stats.frontDeskDetails.map(d => `${d.firstName}|${d.lastName}|${d.checkInDate}`)
+    );
+    const unique = details.filter(d => {
+      const key = `${d.firstName}|${d.lastName}|${d.checkInDate}`;
+      if (existing.has(key)) return false;
+      existing.add(key);
+      return true;
+    });
+    this.stats.frontDeskDetails.push(...unique);
+    this.stats.frontDesk = this.stats.frontDeskDetails.length;
     if (this.stats.frontDeskDetails.length > 100) {
       this.stats.frontDeskDetails = this.stats.frontDeskDetails.slice(-100);
     }
     this.save();
-    logger.debug(`Daily stats: +${count} frontDesk (total: ${this.stats.frontDesk})`);
+    logger.debug(`Daily stats: +${unique.length} frontDesk (total: ${this.stats.frontDesk})`);
   }
 
   addNeedsReview(count, details = []) {
     this.checkDateRollover();
-    this.stats.needsReview += count;
-    this.stats.needsReviewDetails.push(...details);
+    // Deduplicate by email + checkInDate to prevent inflated counts
+    // when the same files are re-processed (e.g. service restart)
+    const existing = new Set(
+      this.stats.needsReviewDetails.map(d => `${d.email}|${d.checkInDate}`)
+    );
+    const unique = details.filter(d => {
+      const key = `${d.email}|${d.checkInDate}`;
+      if (existing.has(key)) return false;
+      existing.add(key);
+      return true;
+    });
+    this.stats.needsReviewDetails.push(...unique);
+    this.stats.needsReview = this.stats.needsReviewDetails.length;
     if (this.stats.needsReviewDetails.length > 100) {
       this.stats.needsReviewDetails = this.stats.needsReviewDetails.slice(-100);
     }
     this.save();
-    logger.debug(`Daily stats: +${count} needsReview (total: ${this.stats.needsReview})`);
+    logger.debug(`Daily stats: +${unique.length} needsReview (total: ${this.stats.needsReview})`);
   }
 
   /**
