@@ -79,10 +79,11 @@ async function queryGuestsByIds(oracleClient, nameIds) {
     `, binds);
 
     for (const row of rows) {
-      // Skip staff/company emails entirely — not guests
+      // Skip staff/company/owner emails entirely — not guests
       const rawEmail = (row.EMAIL || '').trim();
       const emailLower = rawEmail.toLowerCase();
-      if (emailLower.endsWith('@vinesofmendoza.com') || emailLower.endsWith('@the-vines.com')) {
+      if (emailLower.endsWith('@vinesofmendoza.com') || emailLower.endsWith('@the-vines.com')
+          || emailLower === 'mallmannfrancis@gmail.com') {
         continue;
       }
 
@@ -189,12 +190,13 @@ async function queryGuestsSince(oracleClient, sinceTimestamp) {
         WHERE RESORT = 'VINES'
           AND (INSERT_DATE >= :since OR UPDATE_DATE >= :since)
         UNION
-        -- Guests checking in within the next 2 months: may have been booked before
-        -- last sync with no recent UPDATE_DATE, but their check-in window is now open
+        -- Guests checking in within the next 2 months or checking out today:
+        -- may have been booked before last sync with no recent UPDATE_DATE
         SELECT NAME_ID FROM OPERA.RESERVATION_NAME
         WHERE RESORT = 'VINES'
           AND RESV_STATUS IN ('RESERVED','CHECKED IN','CHECKED OUT')
-          AND TRUNC(BEGIN_DATE) BETWEEN TRUNC(SYSDATE) AND ADD_MONTHS(TRUNC(SYSDATE), 2)
+          AND (TRUNC(BEGIN_DATE) BETWEEN TRUNC(SYSDATE) AND ADD_MONTHS(TRUNC(SYSDATE), 2)
+               OR TRUNC(END_DATE) = TRUNC(SYSDATE))
       )
     `, { since: new Date(sinceTimestamp) });
     nameIds = rows.map(r => r.NAME_ID);

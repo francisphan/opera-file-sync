@@ -1,13 +1,16 @@
 /**
  * Google Sheets Client — appends checked-out guest rows to the checkout survey sheet.
  *
+ * Uses direct REST calls via axios (same pattern as notifier.js) to avoid
+ * googleapis library issues in pkg-bundled executables.
+ *
  * Reuses existing Gmail OAuth credentials (GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN).
  * Each monthly tab is named in Spanish (e.g., "Febrero 2026").
  *
  * Columns: HotelID | First Name | Last Name | Email | Arrival Date | Departure Date | Language
  */
 
-const { google } = require('googleapis');
+const axios = require('axios');
 const logger = require('./logger');
 const { mapLanguageToSalesforce } = require('./guest-utils');
 
@@ -17,6 +20,7 @@ const SPANISH_MONTHS = [
 ];
 
 const HOTEL_ID = 'LW7063';
+const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
 
 class SheetsClient {
   constructor() {
@@ -34,14 +38,60 @@ class SheetsClient {
       return;
     }
 
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GMAIL_CLIENT_ID,
-      process.env.GMAIL_CLIENT_SECRET
-    );
-    oauth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+    this._clientId = process.env.GMAIL_CLIENT_ID;
+    this._clientSecret = process.env.GMAIL_CLIENT_SECRET;
+    this._refreshToken = process.env.GMAIL_REFRESH_TOKEN;
 
-    this.sheets = google.sheets({ version: 'v4', auth: oauth2Client });
     logger.info(`Google Sheets integration enabled (spreadsheet: ${this.spreadsheetId})`);
+  }
+
+  /**
+   * Get a fresh access token via OAuth2 refresh
+   */
+  async _getAccessToken() {
+    const res = await axios.post('https://oauth2.googleapis.com/token', {
+      client_id: this._clientId,
+      client_secret: this._clientSecret,
+      refresh_token: this._refreshToken,
+      grant_type: 'refresh_token'
+    });
+    return res.data.access_token;
+  }
+
+  /**
+   * Make an authenticated GET request to the Sheets API
+   */
+  async _get(path, params = {}) {
+    const token = await this._getAccessToken();
+    const res = await axios.get(`${SHEETS_BASE}/${this.spreadsheetId}${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      params
+    });
+    return res.data;
+  }
+
+  /**
+   * Make an authenticated POST request to the Sheets API
+   */
+  async _post(path, body, params = {}) {
+    const token = await this._getAccessToken();
+    const res = await axios.post(`${SHEETS_BASE}/${this.spreadsheetId}${path}`, body, {
+      headers: { Authorization: `Bearer ${token}` },
+      params
+    });
+    return res.data;
+  }
+
+  /**
+   * Make an authenticated PUT request to the Sheets API
+   */
+  async _put(path, body, params = {}) {
+    const token = await this._getAccessToken();
+    const res = await axios.put(`${SHEETS_BASE}/${this.spreadsheetId}${path}`, body, {
+      headers: { Authorization: `Bearer ${token}` },
+      params
+    });
+    return res.data;
   }
 
   /**
@@ -67,31 +117,21 @@ class SheetsClient {
    * @returns {string} The tab name
    */
   async _ensureTab(tabName) {
-    const meta = await this.sheets.spreadsheets.get({
-      spreadsheetId: this.spreadsheetId,
-      fields: 'sheets.properties.title'
-    });
-    const existing = meta.data.sheets.map(s => s.properties.title);
+    const meta = await this._get('', { fields: 'sheets.properties.title' });
+    const existing = meta.sheets.map(s => s.properties.title);
 
     if (existing.includes(tabName)) return tabName;
 
     logger.info(`Creating new sheet tab: "${tabName}"`);
-    await this.sheets.spreadsheets.batchUpdate({
-      spreadsheetId: this.spreadsheetId,
-      requestBody: {
-        requests: [{ addSheet: { properties: { title: tabName } } }]
-      }
+    await this._post(':batchUpdate', {
+      requests: [{ addSheet: { properties: { title: tabName } } }]
     });
 
     // Write header row
-    await this.sheets.spreadsheets.values.update({
-      spreadsheetId: this.spreadsheetId,
-      range: `'${tabName}'!A1:G1`,
-      valueInputOption: 'RAW',
-      requestBody: {
-        values: [['HotelID', 'First Name', 'Last Name', 'Email', 'Arrival Date', 'Departure Date', 'Language']]
-      }
-    });
+    const range = encodeURIComponent(`'${tabName}'!A1:G1`);
+    await this._put(`/values/${range}`, {
+      values: [['HotelID', 'First Name', 'Last Name', 'Email', 'Arrival Date', 'Departure Date', 'Language']]
+    }, { valueInputOption: 'RAW' });
 
     return tabName;
   }
@@ -102,18 +142,17 @@ class SheetsClient {
   async _getExistingKeys(tabName) {
     const keys = new Set();
     try {
-      const res = await this.sheets.spreadsheets.values.get({
-        spreadsheetId: this.spreadsheetId,
-        range: `'${tabName}'!D2:F`  // Email (col D), Arrival (col E), Departure (col F)
-      });
-      for (const row of (res.data.values || [])) {
+      const range = encodeURIComponent(`'${tabName}'!D2:F`);
+      const data = await this._get(`/values/${range}`);
+      for (const row of (data.values || [])) {
         const email = (row[0] || '').toLowerCase().trim();
         const checkout = (row[2] || '').trim();  // col F = Departure Date
         if (email) keys.add(`${email}|${checkout}`);
       }
     } catch (err) {
       // 404 = empty range, 400 = tab doesn't exist yet — both mean no existing rows
-      if (err.code !== 404 && err.code !== 400) throw err;
+      const status = err.response?.status;
+      if (status !== 404 && status !== 400) throw err;
     }
     return keys;
   }
@@ -169,12 +208,10 @@ class SheetsClient {
           continue;
         }
 
-        await this.sheets.spreadsheets.values.append({
-          spreadsheetId: this.spreadsheetId,
-          range: `'${tabName}'!A:G`,
+        const range = encodeURIComponent(`'${tabName}'!A:G`);
+        await this._post(`/values/${range}:append`, { values: newRows }, {
           valueInputOption: 'RAW',
-          insertDataOption: 'INSERT_ROWS',
-          requestBody: { values: newRows }
+          insertDataOption: 'INSERT_ROWS'
         });
 
         totalAppended += newRows.length;
