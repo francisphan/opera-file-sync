@@ -354,6 +354,206 @@ class Notifier {
   }
 
   /**
+   * Send comprehensive daily front desk report with all on-property activity
+   * @param {Object} reportData - From queryFrontDeskReport()
+   */
+  async sendDailyFrontDeskReport(reportData) {
+    if (!this.frontDeskEmailTo) return;
+
+    const { date, badEmails, inHouse, departures, arrivalsToday, arrivalsTomorrow } = reportData;
+    const totalGuests = inHouse.length + departures.length + arrivalsToday.length + arrivalsTomorrow.length;
+
+    if (totalGuests === 0 && badEmails.length === 0) {
+      logger.info('Daily front desk report: no guests to report');
+      return;
+    }
+
+    const subject = `Daily Front Desk Report — ${date}`;
+
+    // Plain text fallback
+    const textLines = [`Daily Front Desk Report — ${date}\n`];
+    if (badEmails.length > 0) {
+      textLines.push(`PRIORITY: ${badEmails.length} guest(s) need email collection`);
+      badEmails.forEach(g => textLines.push(`  - ${g.firstName} ${g.lastName} (${g.reason}) ${g.email || '(none)'}`));
+      textLines.push('');
+    }
+    const sections = [
+      { label: 'IN HOUSE', guests: inHouse },
+      { label: 'DEPARTURES', guests: departures },
+      { label: 'ARRIVALS TODAY', guests: arrivalsToday },
+      { label: 'ARRIVALS TOMORROW', guests: arrivalsTomorrow }
+    ];
+    for (const s of sections) {
+      if (s.guests.length > 0) {
+        textLines.push(`${s.label} (${s.guests.length}):`);
+        s.guests.forEach(g => textLines.push(`  - ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut} | ${g.country} | ${g.language}`));
+        textLines.push('');
+      }
+    }
+    const textBody = textLines.join('\n');
+
+    // HTML email
+    const tableStyle = 'border-collapse:collapse;width:100%;font-size:13px;margin-bottom:20px';
+    const thStyle = 'padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap';
+    const tdStyle = 'padding:6px 10px;border:1px solid #ddd';
+    const tdNowrap = 'padding:6px 10px;border:1px solid #ddd;white-space:nowrap';
+
+    const guestRow = (g) => `
+      <tr>
+        <td style="${tdStyle}">${g.firstName} ${g.lastName}</td>
+        <td style="${tdNowrap}">${g.villa || '—'}</td>
+        <td style="${tdNowrap}">${g.prs || '—'}</td>
+        <td style="${tdNowrap}">${g.checkIn}</td>
+        <td style="${tdNowrap}">${g.checkOut}</td>
+        <td style="${tdStyle}">${g.country}</td>
+        <td style="${tdStyle}">${g.language}</td>
+        <td style="${tdStyle};font-size:11px">${g.notes || ''}</td>
+      </tr>`;
+
+    const tableHeaders = `
+      <tr>
+        <th style="${thStyle}">Name</th>
+        <th style="${thStyle}">Villa</th>
+        <th style="${thStyle}">PRS</th>
+        <th style="${thStyle}">Check-in</th>
+        <th style="${thStyle}">Check-out</th>
+        <th style="${thStyle}">Country</th>
+        <th style="${thStyle}">Language</th>
+        <th style="${thStyle}">Notes</th>
+      </tr>`;
+
+    const arrivalRow = (g) => `
+      <tr>
+        <td style="${tdStyle}">${g.firstName} ${g.lastName}</td>
+        <td style="${tdNowrap}">${g.villa || '—'}</td>
+        <td style="${tdNowrap}">${g.prs || '—'}</td>
+        <td style="${tdNowrap}">${g.eta || '—'}</td>
+        <td style="${tdNowrap}">${g.checkOut}</td>
+        <td style="${tdStyle}">${g.country}</td>
+        <td style="${tdStyle}">${g.language}</td>
+        <td style="${tdStyle};font-size:11px">${g.notes || ''}</td>
+      </tr>`;
+
+    const arrivalHeaders = `
+      <tr>
+        <th style="${thStyle}">Name</th>
+        <th style="${thStyle}">Villa</th>
+        <th style="${thStyle}">PRS</th>
+        <th style="${thStyle}">ETA</th>
+        <th style="${thStyle}">Check-out</th>
+        <th style="${thStyle}">Country</th>
+        <th style="${thStyle}">Language</th>
+        <th style="${thStyle}">Notes</th>
+      </tr>`;
+
+    const prsTotal = (guests) => guests.reduce((sum, g) => sum + (g.adults || 0) + (g.children || 0), 0);
+
+    const buildSection = (title, color, guests, isArrival = false) => {
+      if (guests.length === 0) return '';
+      const total = prsTotal(guests);
+      const hdrs = isArrival ? arrivalHeaders : tableHeaders;
+      const rowFn = isArrival ? arrivalRow : guestRow;
+      return `
+        <h3 style="margin:20px 0 8px;padding:8px 12px;background:${color};color:#fff;border-radius:4px;font-size:14px">${title}</h3>
+        <table style="${tableStyle}">
+          ${hdrs}
+          ${guests.map(rowFn).join('')}
+          <tr style="background:#f9f9f9">
+            <td colspan="8" style="${tdStyle};font-weight:bold;font-size:12px">Total: ${total} guest(s)</td>
+          </tr>
+        </table>`;
+    };
+
+    let htmlBody = `
+      <h2 style="margin-bottom:4px">Daily Front Desk Report</h2>
+      <p style="color:#666;margin-top:0"><strong>Date:</strong> ${date}</p>`;
+
+    // Priority section: bad emails
+    if (badEmails.length > 0) {
+      htmlBody += `
+        <h3 style="margin:20px 0 8px;padding:8px 12px;background:#e53935;color:#fff;border-radius:4px;font-size:14px">
+          Priority: ${badEmails.length} Guest(s) Need Email Collection
+        </h3>
+        <table style="${tableStyle}">
+          <tr style="background:#ffebee">
+            <th style="${thStyle}">Name</th>
+            <th style="${thStyle}">Current Email</th>
+            <th style="${thStyle}">Villa</th>
+            <th style="${thStyle}">PRS</th>
+            <th style="${thStyle}">Reason</th>
+            <th style="${thStyle}">Check-in</th>
+            <th style="${thStyle}">Check-out</th>
+            <th style="${thStyle}">Notes</th>
+          </tr>
+          ${badEmails.map(g => `
+          <tr>
+            <td style="${tdStyle}">${g.firstName} ${g.lastName}</td>
+            <td style="${tdStyle}">${g.email || ''}</td>
+            <td style="${tdNowrap}">${g.villa || '—'}</td>
+            <td style="${tdNowrap}">${g.prs || '—'}</td>
+            <td style="${tdStyle};color:#c62828">${g.reason}</td>
+            <td style="${tdNowrap}">${g.checkIn}</td>
+            <td style="${tdNowrap}">${g.checkOut}</td>
+            <td style="${tdStyle};font-size:11px">${g.notes || ''}</td>
+          </tr>`).join('')}
+          <tr style="background:#f9f9f9">
+            <td colspan="8" style="${tdStyle};font-weight:bold;font-size:12px">Total: ${badEmails.length} guest(s)</td>
+          </tr>
+        </table>
+        <p style="color:#c62828;font-size:12px;margin-top:4px">Please collect personal email addresses for these guests.</p>`;
+    }
+
+    htmlBody += buildSection('Guests In House', '#1565c0', inHouse);
+    htmlBody += buildSection('Departures', '#757575', departures);
+    htmlBody += buildSection('Arrivals Today', '#2e7d32', arrivalsToday, true);
+    htmlBody += buildSection('Arrivals Tomorrow', '#66bb6a', arrivalsTomorrow, true);
+
+    htmlBody += `
+      <p style="color:#999;font-size:11px;margin-top:24px;border-top:1px solid #eee;padding-top:8px">
+        Generated by OPERA Sync at ${new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })}
+      </p>`;
+
+    // Build CSV attachment with all sections
+    const csvEscape = (v) => {
+      const s = String(v || '');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csvRows = ['Section,Name,Email,Villa,PRS,ETA,Check-in,Check-out,Country,Language,Reason,Notes'];
+    const addCsvRows = (section, guests) => {
+      for (const g of guests) {
+        csvRows.push([
+          section,
+          `${g.firstName} ${g.lastName}`,
+          g.email || '',
+          g.villa || '',
+          g.prs || '',
+          g.eta || '',
+          g.checkIn,
+          g.checkOut,
+          g.country,
+          g.language,
+          g.reason || '',
+          g.notes || ''
+        ].map(csvEscape).join(','));
+      }
+    };
+    addCsvRows('Bad Email', badEmails);
+    addCsvRows('In House', inHouse);
+    addCsvRows('Departures', departures);
+    addCsvRows('Arrivals Today', arrivalsToday);
+    addCsvRows('Arrivals Tomorrow', arrivalsTomorrow);
+
+    const attachments = [{
+      filename: `front-desk-report-${date}.csv`,
+      content: csvRows.join('\n'),
+      contentType: 'text/csv'
+    }];
+
+    await this._sendEmailToRecipients(this.frontDeskEmailTo, subject, textBody, htmlBody, attachments);
+    logger.info(`Daily front desk report sent to ${this.frontDeskEmailTo}: ${totalGuests} guests, ${badEmails.length} bad emails`);
+  }
+
+  /**
    * Build CSV string for needs-review records (ready for SF Data Loader)
    * @param {Array} reviewDetails - Array of needsReview objects
    * @returns {string} CSV content

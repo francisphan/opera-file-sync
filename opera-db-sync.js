@@ -16,7 +16,7 @@ const SyncState = require('./src/sync-state');
 const Notifier = require('./src/notifier');
 const DailyStats = require('./src/daily-stats');
 const { setupDailySummary, setupFrontDeskReport } = require('./src/scheduler');
-const { queryGuestsSince } = require('./src/opera-db-query');
+const { queryGuestsSince, queryFrontDeskReport } = require('./src/opera-db-query');
 const SheetsClient = require('./src/sheets-client');
 
 // Configuration
@@ -76,8 +76,10 @@ async function initialize() {
   // Setup daily summary scheduler (no fileTracker for DB mode)
   setupDailySummary(notifier, dailyStats, null);
 
-  // Setup front desk report scheduler
-  setupFrontDeskReport(notifier, dailyStats);
+  // Setup front desk report scheduler (wired to Oracle for direct queries)
+  // Note: oracleClient is connected after this, but the queryFn closure captures the variable
+  // and only executes at scheduled time, by which point oracleClient is connected.
+  setupFrontDeskReport(notifier, dailyStats, (dateStr) => queryFrontDeskReport(oracleClient, dateStr));
   logger.info('Testing Salesforce connection...');
   const sfConnected = await sfClient.test();
   if (!sfConnected) {

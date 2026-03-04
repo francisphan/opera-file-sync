@@ -84,7 +84,7 @@ async function initialize() {
   setupDailySummary(notifier, dailyStats, fileTracker);
 
   // Setup front desk report scheduler
-  setupFrontDeskReport(notifier, dailyStats);
+  setupFrontDeskReport(notifier, dailyStats, null);
 
   // Test Salesforce connection
   logger.info('Testing Salesforce connection...');

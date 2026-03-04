@@ -141,9 +141,10 @@ async function triggerDailySummary(notifier, dailyStats, fileTracker = null) {
  * Setup front desk report email scheduling
  * @param {Notifier} notifier - Notifier instance
  * @param {DailyStats} dailyStats - DailyStats instance
+ * @param {Function|null} queryFn - Async function(dateStr) returning report data from Oracle. If null, falls back to dailyStats.
  * @returns {Object|null} Scheduled job object or null
  */
-function setupFrontDeskReport(notifier, dailyStats) {
+function setupFrontDeskReport(notifier, dailyStats, queryFn) {
   const enabled = process.env.ENABLE_FRONT_DESK_REPORT !== 'false';
   const frontDeskTo = process.env.FRONT_DESK_EMAIL_TO;
 
@@ -173,19 +174,29 @@ function setupFrontDeskReport(notifier, dailyStats) {
   const job = schedule.scheduleJob(rule, async () => {
     logger.info(`Running scheduled front desk report (${reportTime} ${timezone})`);
     try {
-      const stats = dailyStats.getStats();
-      if ((stats.frontDeskDetails || []).length > 0) {
-        await notifier.sendFrontDeskReport(stats);
-        logger.info('Front desk report sent');
+      if (queryFn) {
+        // Direct Oracle query for comprehensive report
+        const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
+        const reportData = await queryFn(today);
+        await notifier.sendDailyFrontDeskReport(reportData);
+        logger.info('Daily front desk report sent (Oracle query)');
       } else {
-        logger.info('No front desk items to report');
+        // Fallback: use accumulated dailyStats (old behavior)
+        const stats = dailyStats.getStats();
+        if ((stats.frontDeskDetails || []).length > 0) {
+          await notifier.sendFrontDeskReport(stats);
+          logger.info('Front desk report sent (dailyStats fallback)');
+        } else {
+          logger.info('No front desk items to report');
+        }
       }
     } catch (err) {
       logger.error('Error sending front desk report:', err.message);
+      if (err.stack) logger.error(err.stack);
     }
   });
 
-  logger.info(`Front desk report scheduled for ${reportTime} ${timezone} → ${frontDeskTo}`);
+  logger.info(`Front desk report scheduled for ${reportTime} ${timezone} → ${frontDeskTo}${queryFn ? ' (Oracle direct query)' : ' (dailyStats fallback)'}`);
   return job;
 }
 
