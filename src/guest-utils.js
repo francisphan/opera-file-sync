@@ -106,7 +106,7 @@ function isAgentEmail(customer) {
  * @returns {string} Salesforce Language__c picklist value (English, Spanish, Portuguese, Unknown)
  */
 function mapLanguageToSalesforce(oracleLanguage) {
-  if (!oracleLanguage) return 'Unknown';
+  if (!oracleLanguage || typeof oracleLanguage !== 'string') return 'Unknown';
 
   const lang = oracleLanguage.toUpperCase().trim();
 

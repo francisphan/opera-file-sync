@@ -255,6 +255,7 @@ class SalesforceClient {
       // Group by email to detect duplicates
       const sfByEmail = new Map();
       for (const rec of result.records) {
+        if (!rec.Email) continue;
         const email = rec.Email.toLowerCase();
         if (!sfByEmail.has(email)) sfByEmail.set(email, []);
         sfByEmail.get(email).push({ id: rec.Id, firstName: rec.FirstName || '', lastName: rec.LastName || '' });
