@@ -100,6 +100,9 @@ async function initialize() {
   const stats = syncState.getStats();
   logger.info(`  Last sync: ${stats.lastSyncTimestamp || 'never'}`);
 
+  // Validate check-in spreadsheet access at startup (disables feature with warning if inaccessible)
+  await sheetsClient.validateCheckinAccess();
+
   logger.info('='.repeat(70));
 }
 
@@ -144,53 +147,93 @@ async function poll() {
       dailyStats.addFrontDesk(frontDesk.length, frontDesk);
     }
 
-    if (records.length === 0) {
+    if (records.length === 0 && frontDesk.length === 0) {
       logger.debug('No new records found');
       syncState.markSuccess(0);
       return;
     }
 
-    logger.info(`Found ${records.length} new/updated guest(s), syncing to Salesforce...`);
+    // ── Salesforce sync (only when records exist) ──
+    if (records.length > 0) {
+      logger.info(`Found ${records.length} new/updated guest(s), syncing to Salesforce...`);
 
-    const results = await sfClient.syncGuestCheckIns(records);
+      const results = await sfClient.syncGuestCheckIns(records);
 
-    if (results.andonPulled) {
-      logger.warn('Andon cord active — skipping sync state update, will retry next poll');
-      return;
+      if (results.andonPulled) {
+        logger.warn('Andon cord active — skipping sync state update, will retry next poll');
+        return;
+      }
+
+      if (results.failed > 0 && results.success === 0) {
+        const err = new Error(`All ${results.failed} records failed: ${results.errors[0]?.error}`);
+        syncState.markFailed(err);
+        dailyStats.addError(err);
+        throw err;
+      }
+
+      logger.info(`✓ Synced ${results.success} records (${results.failed} failed)`);
+      syncState.markSuccess(results.success);
+      dailyStats.addUpload(results.success);
+
+      if (results.needsReview && results.needsReview.length > 0) {
+        dailyStats.addNeedsReview(results.needsReview.length, results.needsReview);
+      }
+
+      await notifier.notifyFileProcessed('db-poll', results.success, frontDesk.length);
+
+      if (notifier.consecutiveErrors > 0) {
+        await notifier.notifyRecovery(results.success);
+      } else {
+        notifier.resetErrorCount();
+      }
+    } else {
+      syncState.markSuccess(0);
     }
 
-    if (results.failed > 0 && results.success === 0) {
-      const err = new Error(`All ${results.failed} records failed: ${results.errors[0]?.error}`);
-      syncState.markFailed(err);
-      dailyStats.addError(err);
-      throw err;
-    }
-
-    logger.info(`✓ Synced ${results.success} records (${results.failed} failed)`);
-    syncState.markSuccess(results.success);
-    dailyStats.addUpload(results.success);
-
-    if (results.needsReview && results.needsReview.length > 0) {
-      dailyStats.addNeedsReview(results.needsReview.length, results.needsReview);
-    }
-
-    // Append today's checkouts to the Google Sheet for survey emails (no backfilling)
-    const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
+    // ── Google Sheets: checkout survey (only when records exist) ──
+    const argNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+    const today = argNow.toISOString().slice(0, 10);
     const checkedOut = records.filter(r => r.invoice && r.invoice.checkOut === today);
     if (checkedOut.length > 0) {
       try {
         await sheetsClient.appendCheckedOutGuests(checkedOut);
       } catch (err) {
-        logger.error('Sheets append failed (non-fatal):', err.message);
+        logger.error('Sheets checkout append failed (non-fatal):', err.message);
+        dailyStats.addError(new Error(`Sheets checkout: ${err.message}`));
       }
     }
 
-    await notifier.notifyFileProcessed('db-poll', results.success, frontDesk.length);
+    // ── Google Sheets: check-in arrivals (records + frontDesk, today + yesterday) ──
+    const yesterdayDate = new Date(argNow);
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterday = yesterdayDate.toISOString().slice(0, 10);
 
-    if (notifier.consecutiveErrors > 0) {
-      await notifier.notifyRecovery(results.success);
-    } else {
-      notifier.resetErrorCount();
+    const checkingInFromRecords = records.filter(r =>
+      r.invoice && (r.invoice.checkIn === today || r.invoice.checkIn === yesterday)
+    );
+    const checkingInFromFrontDesk = frontDesk
+      .filter(fd => fd.checkIn === today || fd.checkIn === yesterday)
+      .map(fd => ({
+        customer: {
+          firstName: fd.firstName,
+          lastName: fd.lastName,
+          email: fd.email || '',
+          language: ''
+        },
+        invoice: {
+          checkIn: fd.checkIn,
+          checkOut: fd.checkOut,
+          resvStatus: fd.reason === 'invalid-email' ? 'No Email' : 'Agent Email'
+        }
+      }));
+    const allCheckIns = [...checkingInFromRecords, ...checkingInFromFrontDesk];
+    if (allCheckIns.length > 0) {
+      try {
+        await sheetsClient.appendCheckInGuests(allCheckIns);
+      } catch (err) {
+        logger.error('Sheets check-in append failed (non-fatal):', err.message);
+        dailyStats.addError(new Error(`Sheets check-in: ${err.message}`));
+      }
     }
 
   } catch (err) {
