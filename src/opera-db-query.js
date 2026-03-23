@@ -322,6 +322,8 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
            daily.ROOM,
            daily.ADULTS,
            daily.CHILDREN,
+           rn.RESV_NAME_ID,
+           rn.PARENT_RESV_NAME_ID,
            TO_CHAR(rn.ARRIVAL_ESTIMATE_TIME, 'HH24:MI') AS ETA,
            prefs.NOTES AS PREF_NOTES,
            resv_notes.NOTES AS RESV_NOTES
@@ -367,7 +369,8 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
 
   logger.info(`Front desk report: ${rows.length} raw reservation rows returned`);
 
-  // Build guest objects and categorize
+  // Build guest objects, group shared reservations, then categorize
+  const allGuests = [];
   const badEmails = [];
   const inHouse = [];
   const departures = [];
@@ -392,15 +395,16 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
 
     const checkInDate = row.CHECK_IN || '';
     const checkOutDate = row.CHECK_OUT || '';
+    const resvNameId = row.RESV_NAME_ID;
+    const parentId = row.PARENT_RESV_NAME_ID;
 
     const villa = (row.ROOM || '').trim() || null;
     const adults = row.ADULTS != null ? Number(row.ADULTS) : null;
     const children = row.CHILDREN != null ? Number(row.CHILDREN) : null;
 
-    // Skip entries without villa/PRS (secondary names on shared reservations)
-    if (!villa && adults == null) continue;
-
     const guest = {
+      resvNameId,
+      parentId,
       firstName,
       lastName,
       email: rawEmail,
@@ -413,7 +417,8 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       checkIn: checkInDate,
       checkOut: checkOutDate,
       eta: (row.ETA || '').trim() || null,
-      notes: [row.PREF_NOTES, row.RESV_NOTES].filter(Boolean).map(s => s.trim()).join(' | ') || null
+      notes: [row.PREF_NOTES, row.RESV_NOTES].filter(Boolean).map(s => s.trim()).join(' | ') || null,
+      companions: []
     };
 
     // Check for bad/agent email
@@ -425,26 +430,64 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       const agentCat = isAgentEmail({ email: cleanedEmail, firstName });
       if (agentCat) badReason = agentCat;
     }
+    guest.reason = badReason || undefined;
 
-    // Categorize by date (plain string comparison — YYYY-MM-DD sorts lexicographically)
+    allGuests.push(guest);
+  }
+
+  // Group secondary guests under their parent reservation
+  const byResvNameId = new Map();
+  for (const g of allGuests) {
+    byResvNameId.set(g.resvNameId, g);
+  }
+  const primaryGuests = [];
+  for (const g of allGuests) {
+    if (g.parentId && byResvNameId.has(g.parentId)) {
+      // Secondary guest — attach to parent
+      const parent = byResvNameId.get(g.parentId);
+      parent.companions.push(`${g.firstName} ${g.lastName}`);
+      // Merge individual preferences from secondary guest into parent notes
+      if (g.notes) {
+        const prefLabel = `${g.firstName}: ${g.notes}`;
+        parent.notes = parent.notes ? `${parent.notes} | ${prefLabel}` : prefLabel;
+      }
+    } else {
+      primaryGuests.push(g);
+    }
+  }
+
+  // Categorize primary guests into sections
+  for (const guest of primaryGuests) {
+    const { checkIn: checkInDate, checkOut: checkOutDate, reason: badReason } = guest;
+
     const isCheckInToday = checkInDate === dateStr;
     const isCheckInTomorrow = checkInDate === tomorrowStr;
     const isCheckOutToday = checkOutDate === dateStr;
     const isInHouse = checkInDate < dateStr && checkOutDate > dateStr;
     const isOnProperty = checkInDate <= dateStr && checkOutDate >= dateStr;
 
+    // Format companion names into display name
+    if (guest.companions.length > 0) {
+      guest.companionNames = guest.companions.join(', ');
+    }
+
+    // Clean up internal fields
+    delete guest.resvNameId;
+    delete guest.parentId;
+    delete guest.companions;
+
     if (badReason && isOnProperty) {
-      badEmails.push({ ...guest, reason: badReason });
+      badEmails.push({ ...guest });
     }
 
     if (isCheckOutToday) {
-      departures.push({ ...guest, reason: badReason || undefined });
+      departures.push({ ...guest });
     } else if (isCheckInToday) {
-      arrivalsToday.push({ ...guest, reason: badReason || undefined });
+      arrivalsToday.push({ ...guest });
     } else if (isCheckInTomorrow) {
-      arrivalsTomorrow.push({ ...guest, reason: badReason || undefined });
+      arrivalsTomorrow.push({ ...guest });
     } else if (isInHouse) {
-      inHouse.push({ ...guest, reason: badReason || undefined });
+      inHouse.push({ ...guest });
     }
   }
 

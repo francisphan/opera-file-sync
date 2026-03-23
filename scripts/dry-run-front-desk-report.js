@@ -107,12 +107,13 @@ async function main() {
         const reason = g.reason ? ` [${g.reason}]` : '';
         const notes = g.notes ? ` | \x1b[33m${g.notes}\x1b[0m` : '';
         const eta = g.eta ? ` | ETA: ${g.eta}` : '';
+        const companions = g.companionNames ? `\n    \x1b[36m+${g.companionNames}\x1b[0m` : '';
         if (s.label.startsWith('BAD')) {
-          console.log(`  ${g.firstName} ${g.lastName} | ${g.email || '(none)'} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut}${reason}${notes}`);
+          console.log(`  ${g.firstName} ${g.lastName} | ${g.email || '(none)'} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut}${reason}${notes}${companions}`);
         } else if (s.label.startsWith('ARRIVAL')) {
-          console.log(`  ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'}${eta} | →${g.checkOut} | ${g.country} | ${g.language}${notes}`);
+          console.log(`  ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'}${eta} | →${g.checkOut} | ${g.country} | ${g.language}${notes}${companions}`);
         } else {
-          console.log(`  ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut} | ${g.country} | ${g.language}${notes}`);
+          console.log(`  ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut} | ${g.country} | ${g.language}${notes}${companions}`);
         }
       }
       console.log('');

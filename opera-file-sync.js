@@ -98,24 +98,6 @@ async function initialize() {
     process.exit(1);
   }
 
-  // Test email configuration if enabled
-  if (process.env.EMAIL_ENABLED === 'true') {
-    logger.info('Testing email configuration...');
-    const emailWorking = await notifier.testEmail();
-    if (!emailWorking) {
-      logger.warn('Email notifications are enabled but test failed. Check SMTP settings.');
-    }
-  }
-
-  // Test Slack configuration if enabled
-  if (process.env.SLACK_WEBHOOK_URL) {
-    logger.info('Testing Slack configuration...');
-    const slackWorking = await notifier.testSlack();
-    if (!slackWorking) {
-      logger.warn('Slack notifications are enabled but test failed. Check webhook URL.');
-    }
-  }
-
   logger.info('Configuration:');
   logger.info(`  Export Directory: ${CONFIG.exportDir}`);
   logger.info(`  Processed Directory: ${CONFIG.processedDir}`);

@@ -398,9 +398,15 @@ class Notifier {
     const tdStyle = 'padding:6px 10px;border:1px solid #ddd';
     const tdNowrap = 'padding:6px 10px;border:1px solid #ddd;white-space:nowrap';
 
+    const nameCell = (g) => {
+      let name = `${g.firstName} ${g.lastName}`;
+      if (g.companionNames) name += `<br><span style="font-size:11px;color:#666">+${g.companionNames}</span>`;
+      return name;
+    };
+
     const guestRow = (g) => `
       <tr>
-        <td style="${tdStyle}">${g.firstName} ${g.lastName}</td>
+        <td style="${tdStyle}">${nameCell(g)}</td>
         <td style="${tdNowrap}">${g.villa || '—'}</td>
         <td style="${tdNowrap}">${g.prs || '—'}</td>
         <td style="${tdNowrap}">${g.checkIn}</td>
@@ -424,7 +430,7 @@ class Notifier {
 
     const arrivalRow = (g) => `
       <tr>
-        <td style="${tdStyle}">${g.firstName} ${g.lastName}</td>
+        <td style="${tdStyle}">${nameCell(g)}</td>
         <td style="${tdNowrap}">${g.villa || '—'}</td>
         <td style="${tdNowrap}">${g.prs || '—'}</td>
         <td style="${tdNowrap}">${g.eta || '—'}</td>
@@ -487,7 +493,7 @@ class Notifier {
           </tr>
           ${badEmails.map(g => `
           <tr>
-            <td style="${tdStyle}">${g.firstName} ${g.lastName}</td>
+            <td style="${tdStyle}">${nameCell(g)}</td>
             <td style="${tdStyle}">${g.email || ''}</td>
             <td style="${tdNowrap}">${g.villa || '—'}</td>
             <td style="${tdNowrap}">${g.prs || '—'}</td>

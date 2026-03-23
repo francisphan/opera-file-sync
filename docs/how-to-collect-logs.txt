@@ -1,0 +1,176 @@
+=====================================================
+  How to Collect Log Files from the OPERA Sync App
+=====================================================
+
+Hi! This guide will walk you through collecting the log files from
+the OPERA sync service and putting them into a single zip file
+that you can share. Just follow the steps below.
+
+You will be typing commands into a black window called
+"Command Prompt." Don't worry -- nothing here will change or
+break anything. You are only copying files.
+
+
+-----------------------------------------------------
+STEP 1: Open Command Prompt
+-----------------------------------------------------
+
+  a) Press the Windows key on your keyboard (the flag icon,
+     usually between Ctrl and Alt).
+
+  b) Type:  cmd
+
+  c) You should see "Command Prompt" appear in the search
+     results. Click on it.
+
+  d) A black window with white text will open. This is where
+     you will type the commands below.
+
+
+-----------------------------------------------------
+STEP 2: Find the OPERA Sync App Folder
+-----------------------------------------------------
+
+If you already know where the app is installed, skip to Step 3.
+
+The app is usually in a folder like C:\opera-sync or
+C:\opera-file-sync. To check, type this command and press Enter:
+
+  dir C:\opera-sync
+
+If you see a list of files (including a "logs" folder), that is
+the right place. Move on to Step 3.
+
+If you see "The system cannot find the path specified," try:
+
+  dir C:\opera-file-sync
+
+Still not found? Try searching the whole C: drive. Type this
+and press Enter (it may take a minute):
+
+  dir C:\ /s /b /ad | findstr /i "opera-sync"
+
+Look through the results for a folder that contains the app.
+
+
+-----------------------------------------------------
+STEP 3: Go to the App Folder
+-----------------------------------------------------
+
+Type the following command and press Enter. Replace the path
+with the correct one if yours is different:
+
+  cd C:\opera-sync
+
+You should see the prompt change to show that folder, like:
+
+  C:\opera-sync>
+
+To double-check you are in the right place, type:
+
+  dir
+
+You should see items like "logs", "src", "package.json", and
+possibly "daily-stats.json" in the list.
+
+
+-----------------------------------------------------
+STEP 4: Create the Zip File
+-----------------------------------------------------
+
+Now you will bundle everything into a zip file and put it on
+your Desktop. Copy and paste this entire command, then press
+Enter:
+
+  tar -a -cf "%USERPROFILE%\Desktop\opera-sync-logs.zip" logs\*.log* daily-stats.json sync-state.json processed-files.json 2>nul
+
+NOTE: You might see a message like "The system cannot find the
+file specified" for one or two of the files -- that is okay.
+It just means that particular file does not exist on this
+server, and everything else still gets zipped up.
+
+You should now have a file called "opera-sync-logs.zip" on
+your Desktop.
+
+
+-----------------------------------------------------
+STEP 5: Verify the Zip File
+-----------------------------------------------------
+
+To make sure the zip was created, type:
+
+  dir "%USERPROFILE%\Desktop\opera-sync-logs.zip"
+
+You should see the file listed with its size. If the size is
+very small (less than 1 KB), something may have gone wrong --
+please reach out for help.
+
+
+-----------------------------------------------------
+STEP 6: Share the Zip File
+-----------------------------------------------------
+
+You will find the file called "opera-sync-logs.zip" on your
+Desktop. You can share it by:
+
+  - Email: Attach the zip file to an email and send it.
+  - USB drive: Copy the file onto a USB flash drive.
+  - Shared folder: Copy it to a shared network folder.
+  - Google Drive / OneDrive: Upload it to a cloud drive and
+    share the link.
+
+The zip file is typically between 1 MB and 50 MB depending on
+how long the service has been running.
+
+
+-----------------------------------------------------
+STEP 7: Close the Command Prompt
+-----------------------------------------------------
+
+You can close the black window by typing:
+
+  exit
+
+Or just click the X in the top-right corner.
+
+
+=====================================================
+  What Is In the Zip File (For Reference)
+=====================================================
+
+The zip contains:
+
+  logs\opera-sync.log       Main log file (plus older copies
+  logs\opera-sync.log.1      named .1, .2, etc.)
+  logs\opera-sync.log.2
+  ...
+
+  logs\opera-sync-errors.log  Error-only log (plus older copies)
+  logs\opera-sync-errors.log.1
+  ...
+
+  daily-stats.json           Today's sync statistics
+  sync-state.json            Last sync timestamp and status
+  processed-files.json       List of previously processed files
+
+
+=====================================================
+  Troubleshooting
+=====================================================
+
+"tar is not recognized..."
+  This means your version of Windows does not have the tar
+  command (it was added in Windows 10 version 1803). Instead,
+  use this alternative command:
+
+  powershell -command "Compress-Archive -Path 'logs\*.log*','daily-stats.json','sync-state.json','processed-files.json' -DestinationPath '%USERPROFILE%\Desktop\opera-sync-logs.zip' -Force"
+
+"The system cannot find the path specified"
+  Make sure you are in the correct app folder (Step 3). Type
+  "dir" and check that you see a "logs" folder listed.
+
+"Access is denied"
+  Try right-clicking on "Command Prompt" in the Start menu
+  and choosing "Run as administrator," then repeat from Step 3.
+
+=====================================================
