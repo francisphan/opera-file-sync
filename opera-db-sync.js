@@ -10,6 +10,16 @@
 require('dotenv').config();
 
 const logger = require('./src/logger');
+
+// Prevent unhandled rejections from crashing the process (Node 18+ terminates by default)
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception (shutting down):', err);
+  process.exit(1);
+});
+
 const SalesforceClient = require('./src/salesforce-client');
 const OracleClient = require('./src/oracle-client');
 const SyncState = require('./src/sync-state');
@@ -240,7 +250,11 @@ async function poll() {
     logger.error('Error during poll:', err.message);
     if (err.stack) logger.debug(err.stack);
     dailyStats.addError(err);
-    await notifier.notifyFileError('db-poll', err, { stack: err.stack });
+    try {
+      await notifier.notifyFileError('db-poll', err, { stack: err.stack });
+    } catch (notifyErr) {
+      logger.error('Failed to send error notification:', notifyErr.message);
+    }
   } finally {
     isPolling = false;
   }
@@ -254,11 +268,11 @@ function startPolling() {
   logger.info(`Polling every ${CONFIG.pollIntervalMs / 1000 / 60} minutes for database changes...`);
   logger.info('='.repeat(70));
 
-  // Run first poll immediately
-  poll();
+  // Run first poll immediately (with .catch to prevent unhandled rejection)
+  poll().catch(err => logger.error('Initial poll failed:', err.message));
 
   // Then poll on interval
-  pollTimer = setInterval(poll, CONFIG.pollIntervalMs);
+  pollTimer = setInterval(() => poll().catch(err => logger.error('Poll failed:', err.message)), CONFIG.pollIntervalMs);
 }
 
 /**
@@ -299,15 +313,15 @@ async function main() {
   try {
     await initialize();
 
-    // Run initial catch-up sync
-    logger.info('Running initial sync...');
-    await poll();
-
-    // Start polling loop
+    // Start polling loop (first poll runs immediately inside startPolling)
     startPolling();
 
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
+    // SIGBREAK is sent by Windows when the console window is closed or Ctrl+Break is pressed
+    if (process.platform === 'win32') {
+      process.on('SIGBREAK', shutdown);
+    }
 
   } catch (err) {
     logger.error('Fatal error during startup:', err);
