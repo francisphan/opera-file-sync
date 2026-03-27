@@ -413,6 +413,7 @@ class SalesforceClient {
         }
       } catch (err) {
         logger.error(`Error querying existing ${guestObject}:`, err.message);
+        throw err;  // Don't silently continue with incomplete data — would create duplicates
       }
     }
 
