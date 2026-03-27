@@ -181,7 +181,7 @@ class Notifier {
       client_secret: this.gmailClientSecret,
       refresh_token: this.gmailRefreshToken,
       grant_type: 'refresh_token'
-    });
+    }, { timeout: 15000 });
     const accessToken = tokenRes.data.access_token;
     logger.debug('Gmail access token obtained');
 
@@ -244,7 +244,7 @@ class Notifier {
     const res = await axios.post(
       'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
       { raw: encoded },
-      { headers: { Authorization: `Bearer ${accessToken}` } }
+      { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 30000 }
     );
 
     logger.debug(`Email sent via Gmail API: ${res.data.id}`);
@@ -271,7 +271,7 @@ class Notifier {
         }];
       }
 
-      await axios.post(this.slackWebhookUrl, payload);
+      await axios.post(this.slackWebhookUrl, payload, { timeout: 10000 });
       logger.debug('Slack message sent');
       return true;
     } catch (err) {
@@ -1056,7 +1056,7 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
           }
         ]
       };
-      await this.sendSlack(slackMessage);
+      await this.sendSlackMessage(slackMessage);
     }
 
     logger.info('Daily summary sent');
@@ -1164,7 +1164,7 @@ The records were NOT synced to Salesforce and are waiting for manual review.
           }
         ]
       };
-      await this.sendSlack(slackMessage);
+      await this.sendSlackMessage(slackMessage);
     }
 
     logger.info(`Duplicate notification sent for ${duplicates.length} records`);
