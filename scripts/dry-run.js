@@ -28,6 +28,11 @@ const SheetsClient = require('../src/sheets-client');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
+function escapeSoql(str) {
+  if (!str) return '';
+  return String(str).replace(/'/g, "\\'");
+}
+
 const VERBOSE      = process.argv.includes('--verbose');
 const SEND_EMAIL   = process.argv.includes('--email');
 const SINCE_ARG    = (() => { const i = process.argv.indexOf('--since'); return i !== -1 ? process.argv[i + 1] : null; })();
@@ -539,7 +544,7 @@ async function main() {
 
   for (let i = 0; i < uniqueEmails.length; i += BATCH_SIZE) {
     const batch   = uniqueEmails.slice(i, i + BATCH_SIZE);
-    const escaped = batch.map(e => `'${e.replace(/'/g, "\\'")}'`).join(',');
+    const escaped = batch.map(e => `'${escapeSoql(e)}'`).join(',');
     const result  = await sfConn.query(`SELECT Id, Email FROM Contact WHERE Email IN (${escaped})`);
 
     const sfByEmail = new Map();
@@ -595,7 +600,7 @@ async function main() {
     console.log(`  Querying ${GUEST_OBJECT} for ${realContactIds.length} existing Contact${realContactIds.length !== 1 ? 's' : ''}...`);
     for (let i = 0; i < realContactIds.length; i += BATCH_SIZE) {
       const idBatch = realContactIds.slice(i, i + BATCH_SIZE);
-      const escaped = idBatch.map(id => `'${id}'`).join(',');
+      const escaped = idBatch.map(id => `'${escapeSoql(id)}'`).join(',');
       try {
         let result = await sfConn.query(
           `SELECT Id, ${CONTACT_LOOKUP}, Check_In_Date__c, ${GUEST_DIFF_SOQL_FIELDS} ` +

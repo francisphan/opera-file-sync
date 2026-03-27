@@ -27,6 +27,11 @@ const SF_CONFIG = {
   refreshToken: process.env.SF_REFRESH_TOKEN,
 };
 
+function escapeSoql(str) {
+  if (!str) return '';
+  return String(str).replace(/'/g, "\\'");
+}
+
 const GUEST_OBJECT = process.env.SF_OBJECT || 'TVRS_Guest__c';
 const CONTACT_LOOKUP = process.env.SF_GUEST_CONTACT_LOOKUP || 'Contact__c';
 const BATCH_SIZE = 200;
@@ -96,7 +101,7 @@ async function main() {
 
   for (let i = 0; i < uniqueContactIds.length; i += BATCH_SIZE) {
     const batch = uniqueContactIds.slice(i, i + BATCH_SIZE);
-    const escaped = batch.map(id => `'${id}'`).join(',');
+    const escaped = batch.map(id => `'${escapeSoql(id)}'`).join(',');
     const query = `SELECT Id, FirstName, LastName, Email, LastModifiedDate FROM Contact WHERE Id IN (${escaped})`;
     try {
       const records = await queryAll(conn, query);
@@ -124,7 +129,7 @@ async function main() {
 
   for (let i = 0; i < uniqueContactIds.length; i += BATCH_SIZE) {
     const batch = allContactIds.slice(i, i + BATCH_SIZE);
-    const escaped = batch.map(id => `'${id}'`).join(',');
+    const escaped = batch.map(id => `'${escapeSoql(id)}'`).join(',');
     const query = `SELECT ${CONTACT_LOOKUP}, Guest_First_Name__c, Guest_Last_Name__c, Check_In_Date__c FROM ${GUEST_OBJECT} WHERE ${CONTACT_LOOKUP} IN (${escaped})`;
     try {
       const records = await queryAll(conn, query);

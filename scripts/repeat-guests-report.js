@@ -22,6 +22,11 @@ const { sanitizeEmail, isAgentEmail, mapLanguageToSalesforce } = require('../src
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
+function escapeSoql(str) {
+  if (!str) return '';
+  return String(str).replace(/'/g, "\\'");
+}
+
 const SEND_EMAIL   = process.argv.includes('--email');
 const MIN_STAYS    = (() => { const i = process.argv.indexOf('--min-stays'); return i !== -1 ? parseInt(process.argv[i + 1]) || 2 : 2; })();
 const BATCH_SIZE   = parseInt(process.env.BATCH_SIZE) || 200;
@@ -250,7 +255,7 @@ async function main() {
 
   for (let i = 0; i < uniqueEmails.length; i += BATCH_SIZE) {
     const batch = uniqueEmails.slice(i, i + BATCH_SIZE);
-    const escaped = batch.map(e => `'${e.replace(/'/g, "\\'")}'`).join(',');
+    const escaped = batch.map(e => `'${escapeSoql(e)}'`).join(',');
     const contacts = await sfQueryAll(sfConn,
       `SELECT Id, Email, AccountId FROM Contact WHERE Email IN (${escaped})`
     );
@@ -274,7 +279,7 @@ async function main() {
 
     for (let i = 0; i < contactIds.length; i += BATCH_SIZE) {
       const batch = contactIds.slice(i, i + BATCH_SIZE);
-      const escaped = batch.map(id => `'${id}'`).join(',');
+      const escaped = batch.map(id => `'${escapeSoql(id)}'`).join(',');
 
       try {
         const roles = await sfQueryAll(sfConn,
@@ -310,7 +315,7 @@ async function main() {
         )];
 
         if (accountIds.length > 0) {
-          const accEscaped = accountIds.map(id => `'${id}'`).join(',');
+          const accEscaped = accountIds.map(id => `'${escapeSoql(id)}'`).join(',');
           try {
             const opps = await sfQueryAll(sfConn,
               `SELECT Id, Name, StageName, Amount, CloseDate, IsClosed, IsWon, AccountId

@@ -21,6 +21,11 @@ const logger = require('../src/logger');
 const Notifier = require('../src/notifier');
 const DailyStats = require('../src/daily-stats');
 
+function escapeSoql(str) {
+  if (!str) return '';
+  return String(str).replace(/'/g, "\\'");
+}
+
 logger.level = 'info';
 
 const EMAIL_TO = process.argv[2];
@@ -183,7 +188,7 @@ async function buildLiveData() {
 
   for (let i = 0; i < uniqueEmails.length; i += BATCH_SIZE) {
     const batch = uniqueEmails.slice(i, i + BATCH_SIZE);
-    const escaped = batch.map(e => `'${e.replace(/'/g, "\\'")}'`).join(',');
+    const escaped = batch.map(e => `'${escapeSoql(e)}'`).join(',');
     const result = await sfConn.query(`SELECT Id, Email, FirstName, LastName FROM Contact WHERE Email IN (${escaped})`);
     const sfByEmail = new Map();
     for (const rec of result.records) {

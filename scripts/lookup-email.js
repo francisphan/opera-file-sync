@@ -5,6 +5,11 @@ require('dotenv').config();
 const jsforce      = require('jsforce');
 const OracleClient = require('../src/oracle-client');
 
+function escapeSoql(str) {
+  if (!str) return '';
+  return String(str).replace(/'/g, "\\'");
+}
+
 const EMAIL = process.argv[2];
 if (!EMAIL) { console.error('Usage: node scripts/lookup-email.js <email>'); process.exit(1); }
 
@@ -25,7 +30,7 @@ async function main() {
   await conn.identity();
 
   const contacts = await conn.query(
-    `SELECT Id, FirstName, LastName, Email, CreatedDate, LastModifiedDate FROM Contact WHERE Email = '${EMAIL}'`
+    `SELECT Id, FirstName, LastName, Email, CreatedDate, LastModifiedDate FROM Contact WHERE Email = '${escapeSoql(EMAIL)}'`
   );
   console.log(`Contacts (${contacts.totalSize}):`);
   contacts.records.forEach(c =>
@@ -35,7 +40,7 @@ async function main() {
   const guestObj = process.env.SF_OBJECT || 'TVRS_Guest__c';
   const guests = await conn.query(
     `SELECT Id, Guest_First_Name__c, Guest_Last_Name__c, Email__c, Check_In_Date__c, Check_Out_Date__c, LastModifiedDate ` +
-    `FROM ${guestObj} WHERE Email__c = '${EMAIL}' ORDER BY Check_In_Date__c DESC`
+    `FROM ${guestObj} WHERE Email__c = '${escapeSoql(EMAIL)}' ORDER BY Check_In_Date__c DESC`
   );
   console.log(`\n${guestObj} records (${guests.totalSize}):`);
   guests.records.forEach(g =>
