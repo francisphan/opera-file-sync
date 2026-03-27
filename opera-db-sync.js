@@ -233,7 +233,7 @@ async function poll() {
         invoice: {
           checkIn: fd.checkIn,
           checkOut: fd.checkOut,
-          resvStatus: fd.reason === 'invalid-email' ? 'No Email' : 'Agent Email'
+          resvStatus: fd.resvStatus || ''
         }
       }));
     const allCheckIns = [...checkingInFromRecords, ...checkingInFromFrontDesk];

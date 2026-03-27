@@ -106,7 +106,8 @@ async function queryGuestsByIds(oracleClient, nameIds) {
             operaId: String(row.NAME_ID),
             reason: 'invalid-email',
             checkIn: checkInStr,
-            checkOut: checkOutStr
+            checkOut: checkOutStr,
+            resvStatus: row.RESV_STATUS || ''
           });
         }
         continue;
@@ -141,7 +142,8 @@ async function queryGuestsByIds(oracleClient, nameIds) {
           operaId: customer.operaId,
           reason: agentCategory,
           checkIn: checkInStr,
-          checkOut: checkOutStr
+          checkOut: checkOutStr,
+          resvStatus: row.RESV_STATUS || ''
         });
         continue;
       }

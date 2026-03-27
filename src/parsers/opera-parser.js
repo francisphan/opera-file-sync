@@ -8,9 +8,30 @@
 
 const fs = require('fs');
 const path = require('path');
+const { Transform } = require('stream');
 const csvParser = require('csv-parser');
 const logger = require('../logger');
 const { sanitizeEmail, isAgentEmail, AGENT_DOMAIN_KEYWORDS } = require('../guest-utils');
+
+/**
+ * Returns a Transform stream that strips a UTF-8 BOM (EF BB BF) from the
+ * beginning of the first chunk, preventing csv-parser from embedding the
+ * BOM character in the first column header name.
+ */
+function stripBom() {
+  let first = true;
+  return new Transform({
+    transform(chunk, encoding, callback) {
+      if (first) {
+        first = false;
+        if (chunk[0] === 0xEF && chunk[1] === 0xBB && chunk[2] === 0xBF) {
+          chunk = chunk.subarray(3);
+        }
+      }
+      callback(null, chunk);
+    }
+  });
+}
 
 /**
  * Parse customers CSV file
@@ -22,6 +43,7 @@ async function parseCustomers(filePath) {
     const customers = new Map();
 
     fs.createReadStream(filePath)
+      .pipe(stripBom())
       .pipe(csvParser())
       .on('data', (row) => {
         const operaId = row['Opera Internal ID'];
@@ -62,6 +84,7 @@ async function parseInvoices(filePath) {
     const invoices = new Map();
 
     fs.createReadStream(filePath)
+      .pipe(stripBom())
       .pipe(csvParser())
       .on('data', (row) => {
         const customerId = row['CUSTOMER_ID OPERA'];
@@ -73,7 +96,8 @@ async function parseInvoices(filePath) {
             invoices.set(id, {
               checkIn: row['Check in'] || '',
               checkOut: row['Check out'] || '',
-              guestName: row['Guest Name'] || ''
+              guestName: row['Guest Name'] || '',
+              resvStatus: row['Reservation Status'] || row['Status'] || row['RESV_STATUS'] || ''
             });
           }
         }
@@ -109,7 +133,8 @@ function convertInvoiceDates(invoice) {
   if (!invoice) return null;
   return {
     checkIn: convertDateFormat(invoice.checkIn),
-    checkOut: convertDateFormat(invoice.checkOut)
+    checkOut: convertDateFormat(invoice.checkOut),
+    resvStatus: invoice.resvStatus || ''
   };
 }
 
@@ -166,7 +191,8 @@ async function parseOPERAFiles(customersFile, invoicesFile = null) {
           operaId: customer.operaId,
           reason: 'invalid-email',
           checkIn: (invoice && invoice.checkIn) || '',
-          checkOut: checkOutDate || ''
+          checkOut: checkOutDate || '',
+          resvStatus: (invoice && invoice.resvStatus) || ''
         });
       }
       continue;
@@ -187,7 +213,8 @@ async function parseOPERAFiles(customersFile, invoicesFile = null) {
         operaId: customer.operaId,
         reason: agentCategory,
         checkIn: (invoice && invoice.checkIn) || '',
-        checkOut: checkOutDate || ''
+        checkOut: checkOutDate || '',
+        resvStatus: (invoice && invoice.resvStatus) || ''
       });
       continue;
     }
