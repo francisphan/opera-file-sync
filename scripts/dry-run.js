@@ -603,7 +603,7 @@ async function main() {
       const escaped = idBatch.map(id => `'${escapeSoql(id)}'`).join(',');
       try {
         let result = await sfConn.query(
-          `SELECT Id, ${CONTACT_LOOKUP}, Check_In_Date__c, ${GUEST_DIFF_SOQL_FIELDS} ` +
+          `SELECT Id, ${CONTACT_LOOKUP}, ${GUEST_DIFF_SOQL_FIELDS} ` +
           `FROM ${GUEST_OBJECT} WHERE ${CONTACT_LOOKUP} IN (${escaped})`
         );
         let allRecs = result.records;

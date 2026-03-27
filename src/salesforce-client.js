@@ -397,7 +397,7 @@ class SalesforceClient {
     for (let i = 0; i < successContactIds.length; i += batchSize) {
       const idBatch = successContactIds.slice(i, i + batchSize);
       const escaped = idBatch.map(id => `'${id}'`).join(',');
-      const query = `SELECT Id, ${contactLookup}, Check_In_Date__c, ${GUEST_DIFF_SOQL_FIELDS} FROM ${guestObject} WHERE ${contactLookup} IN (${escaped})`;
+      const query = `SELECT Id, ${contactLookup}, ${GUEST_DIFF_SOQL_FIELDS} FROM ${guestObject} WHERE ${contactLookup} IN (${escaped})`;
 
       try {
         let result = await this.connection.query(query);
@@ -501,6 +501,52 @@ class SalesforceClient {
     }
 
     logger.info(`Phase 3 complete: ${results.guests.created} created, ${results.guests.updated} updated, ${results.guests.failed} failed`);
+
+    // --- Phase 4: Update Contact check-in/check-out dates (latest per contact) ---
+    const contactDates = new Map(); // contactId → { checkIn, checkOut }
+    for (const entry of guestDataList) {
+      if (excludedEntries.has(entry)) continue;
+      const email = (entry.customer.email || '').toLowerCase();
+      if (!email) continue;
+      const status = emailStatus.get(email);
+      if (!status || status.status !== 'exists' || !status.contactId) continue;
+      const checkIn = (entry.invoice && entry.invoice.checkIn) || '';
+      const checkOut = (entry.invoice && entry.invoice.checkOut) || '';
+      if (!checkIn) continue;
+      const existing = contactDates.get(status.contactId);
+      if (!existing || checkIn > existing.checkIn) {
+        contactDates.set(status.contactId, { checkIn, checkOut });
+      }
+    }
+
+    if (contactDates.size > 0) {
+      logger.info(`Phase 4: Updating check-in/check-out dates on ${contactDates.size} Contacts...`);
+      const contactUpdates = [...contactDates.entries()].map(([id, dates]) => ({
+        Id: id,
+        Check_In_Date__c: dates.checkIn,
+        Check_Out_Date__c: dates.checkOut || null
+      }));
+
+      for (let i = 0; i < contactUpdates.length; i += batchSize) {
+        const batch = contactUpdates.slice(i, i + batchSize);
+        try {
+          const batchResults = await this.connection.sobject('Contact').update(batch);
+          const resultsArray = Array.isArray(batchResults) ? batchResults : [batchResults];
+          resultsArray.forEach((res, idx) => {
+            if (res.success) {
+              logger.debug(`Contact dates updated: ${batch[idx].Id}`);
+            } else {
+              const errorMsg = res.errors ? res.errors.map(e => e.message).join(', ') : 'Unknown error';
+              logger.error(`Contact date update failed for ${batch[idx].Id}: ${errorMsg}`);
+            }
+          });
+        } catch (err) {
+          logger.error('Contact date update batch failed:', err.message);
+        }
+      }
+      logger.info('Phase 4 complete');
+    }
+
     logger.info(`Sync complete. needsReview: ${results.needsReview.length} items`);
 
     // Flat aliases for backwards compat with callers (opera-file-sync.js, opera-db-sync.js)
