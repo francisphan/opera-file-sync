@@ -70,7 +70,7 @@ class SheetsClient {
       client_secret: this._clientSecret,
       refresh_token: this._refreshToken,
       grant_type: 'refresh_token'
-    });
+    }, { timeout: 15000 });
     this._cachedToken = res.data.access_token;
     this._tokenExpiry = Date.now() + ((res.data.expires_in || 3600) - 60) * 1000;
     return this._cachedToken;
@@ -84,7 +84,8 @@ class SheetsClient {
     const id = sheetId || this.spreadsheetId;
     const res = await axios.get(`${SHEETS_BASE}/${id}${path}`, {
       headers: { Authorization: `Bearer ${token}` },
-      params
+      params,
+      timeout: 30000
     });
     return res.data;
   }
@@ -97,7 +98,8 @@ class SheetsClient {
     const id = sheetId || this.spreadsheetId;
     const res = await axios.post(`${SHEETS_BASE}/${id}${path}`, body, {
       headers: { Authorization: `Bearer ${token}` },
-      params
+      params,
+      timeout: 30000
     });
     return res.data;
   }
@@ -110,7 +112,8 @@ class SheetsClient {
     const id = sheetId || this.spreadsheetId;
     const res = await axios.put(`${SHEETS_BASE}/${id}${path}`, body, {
       headers: { Authorization: `Bearer ${token}` },
-      params
+      params,
+      timeout: 30000
     });
     return res.data;
   }
@@ -122,6 +125,28 @@ class SheetsClient {
     if (!isoDate) return '';
     const [y, m, d] = isoDate.split('-');
     return `${parseInt(d)}/${parseInt(m)}/${y.slice(2)}`;
+  }
+
+  /**
+   * Normalize a date string to D/M/YY regardless of input format.
+   * Handles both ISO (YYYY-MM-DD) and D/M/YY (as returned by Sheets).
+   * Used to build dedup keys so that read-path and write-path always match.
+   */
+  _normalizeDateKey(dateStr) {
+    if (!dateStr) return '';
+    const s = dateStr.trim();
+    // ISO format: YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return this._formatDate(s);
+    // Already D/M/YY or D/M/YYYY from Sheets — strip leading zeros, normalize year
+    const parts = s.split('/');
+    if (parts.length === 3) {
+      const d = parseInt(parts[0]);
+      const m = parseInt(parts[1]);
+      const y = parts[2].length === 4 ? parts[2].slice(2) : parts[2];
+      return `${d}/${m}/${y}`;
+    }
+    // Unknown format — return as-is (best effort)
+    return s;
   }
 
   /**
@@ -167,7 +192,8 @@ class SheetsClient {
       const data = await this._get(`/values/${range}`);
       for (const row of (data.values || [])) {
         const email = (row[0] || '').toLowerCase().trim();
-        const checkout = (row[2] || '').trim();  // col F = Departure Date
+        // col F = Departure Date — normalize to D/M/YY to match write-path keys
+        const checkout = this._normalizeDateKey(row[2]);
         if (email) keys.add(`${email}|${checkout}`);
       }
     } catch (err) {
@@ -210,7 +236,8 @@ class SheetsClient {
 
         const newRows = [];
         for (const { customer, invoice } of tabGuests) {
-          const key = `${customer.email.toLowerCase()}|${this._formatDate(invoice.checkOut)}`;
+          // Key format: email|D/M/YY — must match _getExistingKeys normalization
+          const key = `${customer.email.toLowerCase()}|${this._normalizeDateKey(invoice.checkOut)}`;
           if (existingKeys.has(key)) continue;
 
           newRows.push([
@@ -314,7 +341,8 @@ class SheetsClient {
       const range = encodeURIComponent(`'${tabName}'!A2:D`);
       const data = await this._get(`/values/${range}`, {}, this.checkinSpreadsheetId);
       for (const row of (data.values || [])) {
-        const checkinDate = (row[0] || '').trim();   // col A
+        // col A = Check-in Date — normalize to D/M/YY to match write-path keys
+        const checkinDate = this._normalizeDateKey(row[0]);
         const email = (row[3] || '').toLowerCase().trim(); // col D
         if (email || checkinDate) keys.add(`${email}|${checkinDate}`);
       }
@@ -381,7 +409,8 @@ class SheetsClient {
         for (const { customer, invoice } of tabGuests) {
           const email = (customer.email || '').toLowerCase();
           const formattedCheckIn = this._formatDate(invoice.checkIn);
-          const key = `${email}|${formattedCheckIn}`;
+          // Key format: email|D/M/YY — must match _getExistingCheckinKeys normalization
+          const key = `${email}|${this._normalizeDateKey(invoice.checkIn)}`;
           if (existingKeys.has(key)) continue;
 
           newRows.push([
