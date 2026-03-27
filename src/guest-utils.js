@@ -93,8 +93,16 @@ function isAgentEmail(customer) {
 
   if (firstName === '' || firstName === '.' || firstName === 'TBC') return 'company';
 
+  // Match keywords against domain part only to avoid false positives
+  // (e.g., 'preserv@gmail.com' should NOT match 'reserv')
+  // Keywords containing '@' (like 'vendor@') match the full email instead
+  const atIndex = email.indexOf('@');
+  const domain = atIndex !== -1 ? email.substring(atIndex + 1) : '';
+
   for (const keyword of AGENT_DOMAIN_KEYWORDS) {
-    if (email.indexOf(keyword.toLowerCase()) !== -1) return 'agent-domain';
+    const kw = keyword.toLowerCase();
+    const target = kw.includes('@') ? email : domain;
+    if (target.indexOf(kw) !== -1) return 'agent-domain';
   }
 
   return null;
