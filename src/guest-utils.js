@@ -220,6 +220,7 @@ const GUEST_DIFF_FIELDS = [
   { key: 'Country__c',                        label: 'Country' },
   { key: 'Telephone__c',                      label: 'Phone' },
   { key: 'Language__c',                       label: 'Language' },
+  { key: 'Check_In_Date__c',                  label: 'Check-in Date' },
   { key: 'Check_Out_Date__c',                 label: 'Check-out Date' },
   { key: 'Future_Sales_Prospect__c',          label: 'Future Sales Prospect',         boolean: true },
   { key: 'TVG__c',                            label: 'TVG',                           boolean: true },
