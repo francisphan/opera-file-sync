@@ -1,6 +1,9 @@
 # Opera Sync — Download latest build and restart service
 # Double-click or run manually to update the server
 
+# Force TLS 1.2 (older Windows/PowerShell defaults to TLS 1.0 which GitHub rejects)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 $repo = "francisphan/opera-file-sync"
 $serviceName = "opera-sf-sync"         # UPDATE: your NSSM service name
 $installDir = "D:\opera-sf-sync"
