@@ -3,28 +3,15 @@
 
 $repo = "francisphan/opera-file-sync"
 $serviceName = "opera-sf-sync"         # UPDATE: your NSSM service name
-$ghToken = $env:GITHUB_TOKEN           # Set via: [System.Environment]::SetEnvironmentVariable('GITHUB_TOKEN', 'ghp_...', 'User')
 $installDir = "D:\opera-sf-sync"
 $exeName = "opera-sync-db.exe"
 
 Write-Host "=== Opera Sync Updater ===" -ForegroundColor Cyan
 
-if (-not $ghToken) {
-    Write-Host "ERROR: GITHUB_TOKEN not set. Run:" -ForegroundColor Red
-    Write-Host '  [System.Environment]::SetEnvironmentVariable("GITHUB_TOKEN", "ghp_...", "User")' -ForegroundColor Yellow
-    Read-Host "Press Enter to exit"
-    exit 1
-}
-
-$headers = @{
-    "User-Agent" = "opera-sync-updater"
-    "Authorization" = "Bearer $ghToken"
-}
-
 # Download latest release
 $apiUrl = "https://api.github.com/repos/$repo/releases/tags/latest"
 Write-Host "Fetching latest release info..."
-$release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+$release = Invoke-RestMethod -Uri $apiUrl -Headers @{ "User-Agent" = "opera-sync-updater" }
 $asset = $release.assets | Where-Object { $_.name -eq $exeName }
 
 if (-not $asset) {
@@ -38,9 +25,7 @@ $destPath = Join-Path $installDir $exeName
 $backupPath = Join-Path $installDir "$exeName.bak"
 
 Write-Host "Downloading $exeName ($([math]::Round($asset.size / 1MB, 1)) MB)..."
-$dlHeaders = $headers.Clone()
-$dlHeaders["Accept"] = "application/octet-stream"
-Invoke-WebRequest -Uri $asset.url -Headers $dlHeaders -OutFile $tempPath
+Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tempPath
 
 # Stop service
 Write-Host "Stopping $serviceName..."
