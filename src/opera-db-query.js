@@ -11,6 +11,12 @@ const { sanitizeEmail, isAgentEmail, mapLanguageToSalesforce } = require('./gues
 
 const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
 
+// Internal/excluded email domains and addresses — these are skipped during sync
+const EXCLUDED_DOMAINS = (process.env.EXCLUDED_EMAIL_DOMAINS || '')
+  .split(',').map(d => d.trim().toLowerCase()).filter(Boolean);
+const EXCLUDED_EMAILS = (process.env.EXCLUDED_EMAILS || '')
+  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+
 /**
  * Format a JS Date as YYYY-MM-DD for Salesforce
  */
@@ -84,8 +90,8 @@ async function queryGuestsByIds(oracleClient, nameIds) {
       // Skip staff/company/owner emails entirely — not guests
       const rawEmail = (row.EMAIL || '').trim();
       const emailLower = rawEmail.toLowerCase();
-      if (emailLower.endsWith('@vinesofmendoza.com') || emailLower.endsWith('@the-vines.com')
-          || emailLower === 'mallmannfrancis@gmail.com') {
+      if (EXCLUDED_EMAILS.includes(emailLower)
+          || EXCLUDED_DOMAINS.some(d => emailLower.endsWith(`@${d}`))) {
         continue;
       }
 

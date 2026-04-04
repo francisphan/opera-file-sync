@@ -7,8 +7,8 @@
  * to a single test recipient.
  *
  * Usage:
- *   node scripts/test-new-emails.js francis.phan@vinesofmendoza.com
- *   node scripts/test-new-emails.js francis.phan@vinesofmendoza.com --mock
+ *   node scripts/test-new-emails.js your-email@example.com
+ *   node scripts/test-new-emails.js your-email@example.com --mock
  *
  * --mock  Skip Oracle/SF and use synthetic data (useful if DB is unreachable)
  */

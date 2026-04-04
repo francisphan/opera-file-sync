@@ -16,7 +16,7 @@ async function testSingleRecord() {
 
   // Create test record
   const testRecord = {
-    Email__c: 'francis.phan@vinesofmendoza.com',
+    Email__c: process.env.TEST_EMAIL || 'test@example.com',
     Guest_First_Name__c: 'Francis',
     Guest_Last_Name__c: 'Phan',
     City__c: 'Cambridge',
@@ -87,7 +87,7 @@ async function testSingleRecord() {
       }
 
       logger.info('\n🔍 Check Salesforce:');
-      logger.info(`  https://thevinesofmendoza2.lightning.force.com/lightning/r/TVRS_Guest__c/a0g8b00001aEHRfAAO/view`);
+      logger.info(`  ${process.env.SF_INSTANCE_URL || 'https://login.salesforce.com'}`);
       logger.info(`  Search for: ${testRecord.Email__c}`);
     } else {
       logger.error('❌ FAILED');
