@@ -16,7 +16,7 @@
     "report:duplicates:send": "node scripts/duplicate-report.js --send",
     "prebuild": "rm -rf node_modules && npm ci --omit=dev",
     "postbuild": "npm install",
-    "build": "npm run prebuild && npx -y @yao-pkg/pkg opera-db-sync.js --targets node18-win-x64 --output dist/opera-sync-db.exe && npm run postbuild"
+    "build": "npm run prebuild && npx -y @yao-pkg/pkg opera-db-sync.js --targets node20-win-x64 --output dist/opera-sync-db.exe && npm run postbuild"
   },
   "pkg": {
     "assets": [

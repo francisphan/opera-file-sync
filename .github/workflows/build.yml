@@ -17,13 +17,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
 
       - name: Install production dependencies
-        run: npm ci --omit=dev
+        run: npm ci --omit=dev --ignore-scripts
 
       - name: Build Windows executable
-        run: npx -y @yao-pkg/pkg opera-db-sync.js --targets node18-win-x64 --output dist/opera-sync-db.exe
+        run: npx -y @yao-pkg/pkg opera-db-sync.js --targets node20-win-x64 --output dist/opera-sync-db.exe
 
       - name: Update latest release
         uses: softprops/action-gh-release@v2
