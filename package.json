@@ -2,14 +2,10 @@
   "name": "opera-file-sync",
   "version": "1.0.0",
   "description": "Standalone script to sync OPERA file exports to Salesforce",
-  "main": "opera-file-sync.js",
-  "bin": {
-    "opera-sync": "./opera-file-sync.js"
-  },
+  "main": "opera-db-sync.js",
   "scripts": {
-    "start": "node opera-file-sync.js",
-    "start:db": "node opera-db-sync.js",
-    "test": "node --test tests/test-guest-utils.js tests/test-opera-parser-unit.js tests/test-unit-core.js",
+    "start": "node opera-db-sync.js",
+    "test": "node --test tests/test-guest-utils.js tests/test-unit-core.js",
     "test:integration": "node tests/test-connection.js",
     "test:oracle": "node tests/test-oracle-connection.js",
     "test:notifications": "node tests/test-notifications.js",
@@ -18,14 +14,9 @@
     "dry-run:email": "node scripts/dry-run.js --email",
     "report:duplicates": "node scripts/duplicate-report.js",
     "report:duplicates:send": "node scripts/duplicate-report.js --send",
-    "build:bundle": "ncc build opera-file-sync.js -o dist",
     "prebuild": "rm -rf node_modules && npm ci --omit=dev",
     "postbuild": "npm install",
-    "build:exe": "npx -y @yao-pkg/pkg opera-file-sync.js --targets node18-win-x64 --output dist/opera-sync-file.exe",
-    "build:exe:db": "npx -y @yao-pkg/pkg opera-db-sync.js --targets node18-win-x64 --output dist/opera-sync-db.exe",
-    "build:all": "npm run prebuild && npm run build:exe && npm run build:exe:db && npm run postbuild",
-    "build:linux": "npm run prebuild && npx -y @yao-pkg/pkg . --targets node18-linux-x64 --output dist/opera-sync-linux && npm run postbuild",
-    "build:macos": "npm run prebuild && npx -y @yao-pkg/pkg . --targets node18-macos-x64 --output dist/opera-sync-macos && npm run postbuild"
+    "build": "npm run prebuild && npx -y @yao-pkg/pkg opera-db-sync.js --targets node18-win-x64 --output dist/opera-sync-db.exe && npm run postbuild"
   },
   "pkg": {
     "assets": [
@@ -44,10 +35,7 @@
   "license": "MIT",
   "dependencies": {
     "axios": "^1.6.5",
-    "chokidar": "^3.6.0",
-    "csv-parser": "^3.0.0",
     "dotenv": "^16.4.5",
-    "fast-xml-parser": "^5.3.6",
     "jsforce": "^3.10.14",
     "node-schedule": "^2.1.1",
     "nodemailer": "^8.0.1",
@@ -55,7 +43,6 @@
     "winston": "^3.11.0"
   },
   "devDependencies": {
-    "@vercel/ncc": "^0.38.1",
     "@yao-pkg/pkg": "^6.14.0",
     "express": "^4.18.2",
     "googleapis": "^171.4.0",
