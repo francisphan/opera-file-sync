@@ -8,6 +8,7 @@ $repo = "francisphan/opera-file-sync"
 $serviceName = "opera-sf-sync"         # UPDATE: your NSSM service name
 $installDir = "D:\opera-sf-sync"
 $exeName = "opera-sync-db.exe"
+$nssm = Join-Path $installDir "nssm.exe"
 
 Write-Host "=== Opera Sync Updater ===" -ForegroundColor Cyan
 
@@ -32,8 +33,8 @@ Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tempPath
 
 # Stop service
 Write-Host "Stopping $serviceName..."
-nssm stop $serviceName
-Start-Sleep -Seconds 3
+& $nssm stop $serviceName
+Start-Sleep -Seconds 5
 
 # Backup current exe
 if (Test-Path $destPath) {
@@ -43,11 +44,12 @@ if (Test-Path $destPath) {
 
 # Replace exe
 Write-Host "Installing new exe..."
-Move-Item $tempPath $destPath -Force
+Copy-Item $tempPath $destPath -Force
+Remove-Item $tempPath -Force
 
 # Start service
 Write-Host "Starting $serviceName..."
-nssm start $serviceName
+& $nssm start $serviceName
 
 Write-Host ""
 Write-Host "Done! Service restarted with latest build." -ForegroundColor Green
