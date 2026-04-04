@@ -489,7 +489,6 @@ class Notifier {
             <th style="${thStyle}">Reason</th>
             <th style="${thStyle}">Check-in</th>
             <th style="${thStyle}">Check-out</th>
-            <th style="${thStyle}">Notes</th>
           </tr>
           ${badEmails.map(g => `
           <tr>
@@ -500,10 +499,9 @@ class Notifier {
             <td style="${tdStyle};color:#c62828">${g.reason}</td>
             <td style="${tdNowrap}">${g.checkIn}</td>
             <td style="${tdNowrap}">${g.checkOut}</td>
-            <td style="${tdStyle};font-size:11px">${g.notes || ''}</td>
           </tr>`).join('')}
           <tr style="background:#f9f9f9">
-            <td colspan="8" style="${tdStyle};font-weight:bold;font-size:12px">Total: ${badEmails.length} guest(s)</td>
+            <td colspan="7" style="${tdStyle};font-weight:bold;font-size:12px">Total: ${badEmails.length} guest(s)</td>
           </tr>
         </table>
         <p style="color:#c62828;font-size:12px;margin-top:4px">Please collect personal email addresses for these guests.</p>`;
@@ -849,14 +847,14 @@ No action required - the system is operating normally.
    * Send daily summary email
    */
   async sendDailySummary(stats) {
-    const subject = `📊 OPERA Sync - Daily Summary (${stats.date})`;
+    const subject = `📊 OPERA Sync - Daily Admin Summary (${stats.date})`;
 
     const duplicateDetails = stats.skippedDuplicateDetails || [];
     const reviewDetails = stats.needsReviewDetails || [];
     const frontDeskDetails = stats.frontDeskDetails || [];
 
     const textBody = `
-OPERA to Salesforce Sync - Daily Summary
+OPERA to Salesforce Sync - Daily Admin Summary
 ========================================
 
 Date: ${stats.date}
@@ -879,7 +877,7 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
     `.trim();
 
     const htmlBody = `
-      <h2>📊 OPERA Sync - Daily Summary</h2>
+      <h2>📊 OPERA Sync - Daily Admin Summary</h2>
       <p><strong>Date:</strong> ${stats.date}</p>
 
       <h3>Today's Activity</h3>
@@ -1035,13 +1033,13 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
 
     if (this.slackWebhookUrl) {
       const slackMessage = {
-        text: `📊 *OPERA Sync - Daily Summary (${stats.date})*`,
+        text: `📊 *OPERA Sync - Daily Admin Summary (${stats.date})*`,
         blocks: [
           {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `📊 *OPERA Sync - Daily Summary*\n*Date:* ${stats.date}`
+              text: `📊 *OPERA Sync - Daily Admin Summary*\n*Date:* ${stats.date}`
             }
           },
           {
