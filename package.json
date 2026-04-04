@@ -19,11 +19,13 @@
     "report:duplicates": "node scripts/duplicate-report.js",
     "report:duplicates:send": "node scripts/duplicate-report.js --send",
     "build:bundle": "ncc build opera-file-sync.js -o dist",
-    "build:exe": "pkg opera-file-sync.js --targets node18-win-x64 --output dist/opera-sync-file.exe",
-    "build:exe:db": "pkg opera-db-sync.js --targets node18-win-x64 --output dist/opera-sync-db.exe",
-    "build:all": "npm run build:exe && npm run build:exe:db",
-    "build:linux": "pkg . --targets node18-linux-x64 --output dist/opera-sync-linux",
-    "build:macos": "pkg . --targets node18-macos-x64 --output dist/opera-sync-macos"
+    "prebuild": "rm -rf node_modules && npm ci --omit=dev",
+    "postbuild": "npm install",
+    "build:exe": "npx -y @yao-pkg/pkg opera-file-sync.js --targets node18-win-x64 --output dist/opera-sync-file.exe",
+    "build:exe:db": "npx -y @yao-pkg/pkg opera-db-sync.js --targets node18-win-x64 --output dist/opera-sync-db.exe",
+    "build:all": "npm run prebuild && npm run build:exe && npm run build:exe:db && npm run postbuild",
+    "build:linux": "npm run prebuild && npx -y @yao-pkg/pkg . --targets node18-linux-x64 --output dist/opera-sync-linux && npm run postbuild",
+    "build:macos": "npm run prebuild && npx -y @yao-pkg/pkg . --targets node18-macos-x64 --output dist/opera-sync-macos && npm run postbuild"
   },
   "pkg": {
     "assets": [
