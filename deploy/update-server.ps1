@@ -5,7 +5,7 @@
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $repo = "francisphan/opera-file-sync"
-$serviceName = "opera-sf-sync"         # UPDATE: your NSSM service name
+$serviceName = "OPERASync"
 $installDir = "D:\opera-sf-sync"
 $exeName = "opera-sync-db.exe"
 $nssm = Join-Path $installDir "nssm.exe"
