@@ -4,6 +4,10 @@
  * Used by both opera-parser.js (CSV mode) and opera-db-query.js (DB mode)
  */
 
+const dns = require('dns');
+const net = require('net');
+const logger = require('./logger');
+
 /**
  * Agent/non-guest email detection keywords
  */
@@ -263,6 +267,106 @@ function diffGuestRecord(current, proposed) {
   return changes;
 }
 
+/**
+ * Resolve MX host for a domain. Returns the lowest-priority MX hostname, or null on failure.
+ */
+function resolveMx(domain) {
+  return new Promise((resolve) => {
+    dns.resolveMx(domain, (err, addresses) => {
+      if (err || !addresses || addresses.length === 0) return resolve(null);
+      addresses.sort((a, b) => a.priority - b.priority);
+      resolve(addresses[0].exchange);
+    });
+  });
+}
+
+/**
+ * Check a single email via SMTP RCPT TO. Returns 'valid', 'invalid', or 'unknown'.
+ * - 'invalid' = server explicitly rejected (550) — mailbox does not exist
+ * - 'unknown' = network error, timeout, or ambiguous response (fail open)
+ * - 'valid' = server accepted the recipient (250)
+ */
+function smtpCheck(mxHost, email, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(25, mxHost);
+    let step = 'connect';
+    let buf = '';
+    const timer = setTimeout(() => { socket.destroy(); resolve('unknown'); }, timeoutMs);
+
+    function send(cmd, nextStep) {
+      step = nextStep;
+      buf = '';
+      socket.write(cmd + '\r\n');
+    }
+
+    socket.setEncoding('utf8');
+    socket.on('data', (data) => {
+      buf += data;
+      // Wait for a complete reply line (ends with \r\n and starts with a 3-digit code)
+      if (!/^\d{3}[ ]/m.test(buf)) return;
+      const code = parseInt(buf.substring(0, 3), 10);
+
+      if (step === 'connect') {
+        if (code === 220) send('EHLO verify.local', 'ehlo');
+        else { clearTimeout(timer); socket.destroy(); resolve('unknown'); }
+      } else if (step === 'ehlo') {
+        if (code === 250) send('MAIL FROM:<>', 'mail');
+        else { clearTimeout(timer); socket.destroy(); resolve('unknown'); }
+      } else if (step === 'mail') {
+        if (code === 250) send(`RCPT TO:<${email}>`, 'rcpt');
+        else { clearTimeout(timer); socket.destroy(); resolve('unknown'); }
+      } else if (step === 'rcpt') {
+        clearTimeout(timer);
+        socket.write('QUIT\r\n');
+        socket.destroy();
+        if (code === 250) resolve('valid');
+        else if (code >= 550 && code <= 559) resolve('invalid');
+        else resolve('unknown');
+      }
+    });
+
+    socket.on('error', () => { clearTimeout(timer); resolve('unknown'); });
+    socket.on('timeout', () => { clearTimeout(timer); socket.destroy(); resolve('unknown'); });
+  });
+}
+
+/**
+ * Verify a batch of emails via SMTP. Groups by domain to reuse MX lookups.
+ * Returns a Map<email, 'valid'|'invalid'|'unknown'>.
+ * Fails open: network errors → 'unknown' (email proceeds normally).
+ */
+async function verifyEmailsSMTP(emails) {
+  const results = new Map();
+  if (!emails || emails.length === 0) return results;
+
+  // Group emails by domain
+  const byDomain = new Map();
+  for (const email of emails) {
+    const domain = email.split('@')[1].toLowerCase();
+    if (!byDomain.has(domain)) byDomain.set(domain, []);
+    byDomain.get(domain).push(email);
+  }
+
+  // Process each domain in parallel
+  const domainChecks = [...byDomain.entries()].map(async ([domain, domainEmails]) => {
+    const mxHost = await resolveMx(domain);
+    if (!mxHost) {
+      // Can't resolve MX — mark all as unknown (fail open)
+      for (const e of domainEmails) results.set(e, 'unknown');
+      return;
+    }
+
+    // Check each email for this domain sequentially (avoid overwhelming the server)
+    for (const email of domainEmails) {
+      const result = await smtpCheck(mxHost, email);
+      results.set(email, result);
+    }
+  });
+
+  await Promise.all(domainChecks);
+  return results;
+}
+
 module.exports = {
   AGENT_DOMAIN_KEYWORDS,
   sanitizeEmail,
@@ -273,4 +377,5 @@ module.exports = {
   GUEST_DIFF_FIELDS,
   GUEST_DIFF_SOQL_FIELDS,
   diffGuestRecord,
+  verifyEmailsSMTP,
 };

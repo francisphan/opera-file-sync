@@ -337,14 +337,18 @@ class Notifier {
           <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-in</th>
           <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-out</th>
         </tr>
-        ${details.map(r => `
+        ${details.map(r => {
+          const reason = r.reason === 'invalid-mailbox' ? 'invalid mailbox (SMTP rejected)'
+            : r.reason || '';
+          return `
         <tr>
           <td style="padding:6px 10px;border:1px solid #ddd">${r.firstName} ${r.lastName}</td>
           <td style="padding:6px 10px;border:1px solid #ddd">${r.email || ''}</td>
-          <td style="padding:6px 10px;border:1px solid #ddd">${r.reason || ''}</td>
+          <td style="padding:6px 10px;border:1px solid #ddd${r.reason === 'invalid-mailbox' ? ';color:#c62828;font-weight:bold' : ''}">${reason}</td>
           <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkIn || ''}</td>
           <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkOut || ''}</td>
-        </tr>`).join('')}
+        </tr>`;
+        }).join('')}
       </table>
       <p style="color:#666;font-size:12px">Please collect personal email addresses for these guests during their stay.</p>
     `;
@@ -916,14 +920,18 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
             <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-in</th>
             <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-out</th>
           </tr>
-          ${frontDeskDetails.map(r => `
+          ${frontDeskDetails.map(r => {
+            const reason = r.reason === 'invalid-mailbox' ? 'invalid mailbox (SMTP rejected)'
+              : r.reason || '';
+            return `
           <tr>
             <td style="padding:6px 10px;border:1px solid #ddd">${r.firstName} ${r.lastName}</td>
             <td style="padding:6px 10px;border:1px solid #ddd">${r.email || ''}</td>
-            <td style="padding:6px 10px;border:1px solid #ddd">${r.reason || ''}</td>
+            <td style="padding:6px 10px;border:1px solid #ddd${r.reason === 'invalid-mailbox' ? ';color:#c62828;font-weight:bold' : ''}">${reason}</td>
             <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkIn || ''}</td>
             <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkOut || ''}</td>
-          </tr>`).join('')}
+          </tr>`;
+          }).join('')}
         </table>
       ` : ''}
 

@@ -7,7 +7,7 @@
  */
 
 const logger = require('./logger');
-const { sanitizeEmail, isAgentEmail, mapLanguageToSalesforce } = require('./guest-utils');
+const { sanitizeEmail, isAgentEmail, mapLanguageToSalesforce, verifyEmailsSMTP } = require('./guest-utils');
 
 const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
 
@@ -172,6 +172,48 @@ async function queryGuestsByIds(oracleClient, nameIds) {
   if (frontDesk.length > 0) {
     logger.info(`Front desk: ${frontDesk.length} on-property guests need email collection`);
   }
+
+  // SMTP mailbox verification — catch invalid addresses before they hit Salesforce/Pardot
+  if (records.length > 0 && process.env.SMTP_VERIFY !== 'false') {
+    const emails = [...new Set(records.map(r => r.customer.email))];
+    logger.info(`Verifying ${emails.length} email(s) via SMTP...`);
+    try {
+      const smtpResults = await verifyEmailsSMTP(emails);
+      const invalidEmails = new Set();
+      for (const [email, status] of smtpResults) {
+        if (status === 'invalid') {
+          invalidEmails.add(email);
+          logger.warn(`SMTP rejected: ${email} — mailbox does not exist`);
+        }
+      }
+      if (invalidEmails.size > 0) {
+        // Move invalid-mailbox records to frontDesk for manual review
+        const kept = [];
+        for (const entry of records) {
+          if (invalidEmails.has(entry.customer.email)) {
+            frontDesk.push({
+              email: entry.customer.email,
+              firstName: entry.customer.firstName,
+              lastName: entry.customer.lastName,
+              operaId: entry.customer.operaId,
+              reason: 'invalid-mailbox',
+              checkIn: entry.invoice ? entry.invoice.checkIn : '',
+              checkOut: entry.invoice ? entry.invoice.checkOut : ''
+            });
+          } else {
+            kept.push(entry);
+          }
+        }
+        logger.info(`SMTP verification: ${invalidEmails.size} invalid mailbox(es) moved to front desk review`);
+        records.length = 0;
+        records.push(...kept);
+      }
+    } catch (err) {
+      // Fail open — don't block sync if SMTP verification has issues
+      logger.warn(`SMTP verification failed (proceeding without): ${err.message}`);
+    }
+  }
+
   logger.info(`Transformed ${records.length} guest records for Salesforce`);
 
   return { records, frontDesk };
