@@ -34,7 +34,7 @@ function formatDate(date) {
  * @param {number[]} nameIds - Array of Opera NAME_IDs
  * @returns {Promise<{records: Array, frontDesk: Array}>}
  */
-async function queryGuestsByIds(oracleClient, nameIds) {
+async function queryGuestsByIds(oracleClient, nameIds, { skipSmtpVerify = false } = {}) {
   if (!nameIds || nameIds.length === 0) {
     return { records: [], frontDesk: [] };
   }
@@ -174,7 +174,8 @@ async function queryGuestsByIds(oracleClient, nameIds) {
   }
 
   // SMTP mailbox verification — catch invalid addresses before they hit Salesforce/Pardot
-  if (records.length > 0 && process.env.SMTP_VERIFY !== 'false') {
+  // Skipped on initial sync (thousands of emails would timeout/get rate-limited)
+  if (records.length > 0 && !skipSmtpVerify && process.env.SMTP_VERIFY !== 'false') {
     const emails = [...new Set(records.map(r => r.customer.email))];
     logger.info(`Verifying ${emails.length} email(s) via SMTP...`);
     try {
@@ -270,7 +271,7 @@ async function queryGuestsSince(oracleClient, sinceTimestamp) {
     logger.info(`Found ${nameIds.length} guests for initial sync`);
   }
 
-  return queryGuestsByIds(oracleClient, nameIds);
+  return queryGuestsByIds(oracleClient, nameIds, { skipSmtpVerify: !sinceTimestamp });
 }
 
 /**

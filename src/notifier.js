@@ -487,25 +487,26 @@ class Notifier {
         <table style="${tableStyle}">
           <tr style="background:#ffebee">
             <th style="${thStyle}">Name</th>
-            <th style="${thStyle}">Current Email</th>
             <th style="${thStyle}">Villa</th>
             <th style="${thStyle}">PRS</th>
             <th style="${thStyle}">Reason</th>
             <th style="${thStyle}">Check-in</th>
             <th style="${thStyle}">Check-out</th>
           </tr>
-          ${badEmails.map(g => `
+          ${badEmails.map(g => {
+            const reason = g.reason === 'no-email' ? 'No email on file'
+              : g.email ? `Invalid: ${g.email}` : g.reason;
+            return `
           <tr>
             <td style="${tdStyle}">${nameCell(g)}</td>
-            <td style="${tdStyle}">${g.email || ''}</td>
             <td style="${tdNowrap}">${g.villa || '—'}</td>
             <td style="${tdNowrap}">${g.prs || '—'}</td>
-            <td style="${tdStyle};color:#c62828">${g.reason}</td>
+            <td style="${tdStyle};color:#c62828">${reason}</td>
             <td style="${tdNowrap}">${g.checkIn}</td>
             <td style="${tdNowrap}">${g.checkOut}</td>
-          </tr>`).join('')}
+          </tr>`;}).join('')}
           <tr style="background:#f9f9f9">
-            <td colspan="7" style="${tdStyle};font-weight:bold;font-size:12px">Total: ${badEmails.length} guest(s)</td>
+            <td colspan="6" style="${tdStyle};font-weight:bold;font-size:12px">Total: ${badEmails.length} guest(s)</td>
           </tr>
         </table>
         <p style="color:#c62828;font-size:12px;margin-top:4px">Please collect personal email addresses for these guests.</p>`;
@@ -915,18 +916,16 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
         <table style="border-collapse:collapse;width:100%;font-size:12px;margin-bottom:16px">
           <tr style="background:#e3f2fd">
             <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Name</th>
-            <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Current Email</th>
             <th style="padding:6px 10px;border:1px solid #ddd;text-align:left">Reason</th>
             <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-in</th>
             <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-out</th>
           </tr>
           ${frontDeskDetails.map(r => {
-            const reason = r.reason === 'invalid-mailbox' ? 'invalid mailbox (SMTP rejected)'
+            const reason = r.reason === 'invalid-mailbox' ? `Invalid: ${r.email || 'SMTP rejected'}`
               : r.reason || '';
             return `
           <tr>
             <td style="padding:6px 10px;border:1px solid #ddd">${r.firstName} ${r.lastName}</td>
-            <td style="padding:6px 10px;border:1px solid #ddd">${r.email || ''}</td>
             <td style="padding:6px 10px;border:1px solid #ddd${r.reason === 'invalid-mailbox' ? ';color:#c62828;font-weight:bold' : ''}">${reason}</td>
             <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkIn || ''}</td>
             <td style="padding:6px 10px;border:1px solid #ddd;white-space:nowrap">${r.checkOut || ''}</td>
