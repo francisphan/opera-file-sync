@@ -84,6 +84,46 @@ function sanitizeEmail(email) {
 }
 
 /**
+ * Return a human-readable reason why an email is invalid, or null if valid.
+ * Mirrors the checks in sanitizeEmail() but explains the failure.
+ */
+function emailInvalidReason(email) {
+  if (!email || typeof email !== 'string') return 'no email';
+
+  const cleaned = email.trim();
+  if (!cleaned) return 'no email';
+
+  if (!/^[\x00-\x7F]*$/.test(cleaned)) return 'non-ASCII characters';
+
+  const parts = cleaned.split('@');
+  if (parts.length !== 2) return parts.length === 1 ? 'missing @' : 'multiple @ signs';
+
+  const localPart = parts[0];
+  const domain = parts[1];
+
+  if (localPart.length === 0) return 'empty local part';
+  if (!domain.includes('.')) return 'domain has no dot';
+  if (domain.includes('..') || domain.startsWith('.') || domain.endsWith('.')) return 'malformed domain';
+  if (/[,;.]$/.test(domain)) return 'domain ends with punctuation';
+
+  const domainParts = domain.split('.');
+  const tld = domainParts[domainParts.length - 1];
+  if (tld.length < 2 || tld.length > 6 || !/^[a-z0-9]+$/i.test(tld)) return `invalid TLD (.${tld})`;
+
+  const secondLevel = domainParts[domainParts.length - 2];
+  const knownProviders = ['gmail', 'yahoo', 'hotmail', 'outlook', 'aol', 'icloud', 'mail'];
+  const suspiciousTLDs = ['co', 'me', 'tv', 'io', 'to'];
+
+  if (domainParts.length === 2 &&
+      knownProviders.includes(secondLevel?.toLowerCase()) &&
+      suspiciousTLDs.includes(tld.toLowerCase())) {
+    return `suspicious provider TLD (${domain})`;
+  }
+
+  return null;
+}
+
+/**
  * Check if a customer record looks like a travel agent or non-guest
  * @param {Object} customer - Customer data with email and firstName fields
  * @returns {string|null} Category string if agent, null if guest
@@ -370,6 +410,7 @@ async function verifyEmailsSMTP(emails) {
 module.exports = {
   AGENT_DOMAIN_KEYWORDS,
   sanitizeEmail,
+  emailInvalidReason,
   isAgentEmail,
   transformToContact,
   transformToTVRSGuest,

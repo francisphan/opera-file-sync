@@ -338,7 +338,8 @@ class Notifier {
           <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-out</th>
         </tr>
         ${details.map(r => {
-          const reason = r.reason === 'invalid-mailbox' ? 'invalid mailbox (SMTP rejected)'
+          const reason = r.reason === 'invalid-mailbox' ? 'SMTP rejected (mailbox not found)'
+            : r.reason === 'invalid-email' ? 'invalid email'
             : r.reason || '';
           return `
         <tr>
@@ -921,7 +922,8 @@ ${stats.recordsSynced > 0 ? 'The system is operating normally.' : 'No records we
             <th style="padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap">Check-out</th>
           </tr>
           ${frontDeskDetails.map(r => {
-            const reason = r.reason === 'invalid-mailbox' ? `Invalid: ${r.email || 'SMTP rejected'}`
+            const reason = r.reason === 'invalid-mailbox' ? 'SMTP rejected (mailbox not found)'
+              : r.reason === 'invalid-email' ? 'invalid email'
               : r.reason || '';
             return `
           <tr>

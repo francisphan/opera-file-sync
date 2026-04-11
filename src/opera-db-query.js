@@ -7,7 +7,7 @@
  */
 
 const logger = require('./logger');
-const { sanitizeEmail, isAgentEmail, mapLanguageToSalesforce, verifyEmailsSMTP } = require('./guest-utils');
+const { sanitizeEmail, emailInvalidReason, isAgentEmail, mapLanguageToSalesforce, verifyEmailsSMTP } = require('./guest-utils');
 
 const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
 
@@ -16,6 +16,10 @@ const EXCLUDED_DOMAINS = (process.env.EXCLUDED_EMAIL_DOMAINS || '')
   .split(',').map(d => d.trim().toLowerCase()).filter(Boolean);
 const EXCLUDED_EMAILS = (process.env.EXCLUDED_EMAILS || '')
   .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+
+// Room prefixes to exclude (e.g. Posting Masters: "PM")
+const EXCLUDED_ROOM_PREFIXES = (process.env.EXCLUDED_ROOM_PREFIXES || 'PM')
+  .split(',').map(p => p.trim().toUpperCase()).filter(Boolean);
 
 /**
  * Format a JS Date as YYYY-MM-DD for Salesforce
@@ -58,7 +62,7 @@ async function queryGuestsByIds(oracleClient, nameIds, { skipSmtpVerify = false 
              phone.PHONE_NUMBER AS PHONE,
              n.LANGUAGE,
              a.CITY, a.STATE, a.COUNTRY,
-             rn.CHECK_IN, rn.CHECK_OUT, rn.RESV_STATUS
+             rn.CHECK_IN, rn.CHECK_OUT, rn.RESV_STATUS, rn.ROOM
       FROM OPERA.NAME n
       JOIN OPERA.NAME_PHONE p ON n.NAME_ID = p.NAME_ID
         AND p.PHONE_ROLE = 'EMAIL' AND p.PRIMARY_YN = 'Y'
@@ -76,17 +80,34 @@ async function queryGuestsByIds(oracleClient, nameIds, { skipSmtpVerify = false 
       LEFT JOIN OPERA.NAME_ADDRESS a ON n.NAME_ID = a.NAME_ID
         AND a.PRIMARY_YN = 'Y' AND a.INACTIVE_DATE IS NULL
       LEFT JOIN (
-        SELECT NAME_ID, BEGIN_DATE AS CHECK_IN, END_DATE AS CHECK_OUT, RESV_STATUS,
-               ROW_NUMBER() OVER (PARTITION BY NAME_ID ORDER BY BEGIN_DATE DESC) AS rn
-        FROM OPERA.RESERVATION_NAME
-        WHERE RESORT = 'VINES'
-          AND RESV_STATUS IN ('RESERVED','CHECKED IN','CHECKED OUT')
-          AND BEGIN_DATE <= ADD_MONTHS(TRUNC(SYSDATE), 2)
+        SELECT rnx.NAME_ID, rnx.BEGIN_DATE AS CHECK_IN, rnx.END_DATE AS CHECK_OUT,
+               rnx.RESV_STATUS, rm.ROOM,
+               ROW_NUMBER() OVER (PARTITION BY rnx.NAME_ID ORDER BY rnx.BEGIN_DATE DESC) AS rn
+        FROM OPERA.RESERVATION_NAME rnx
+        LEFT JOIN (
+          SELECT rden.RESV_NAME_ID, rde.ROOM,
+                 ROW_NUMBER() OVER (PARTITION BY rden.RESV_NAME_ID ORDER BY rden.RESERVATION_DATE) AS rn
+          FROM OPERA.RESERVATION_DAILY_ELEMENT_NAME rden
+          JOIN OPERA.RESERVATION_DAILY_ELEMENTS rde
+            ON rden.RESORT = rde.RESORT
+            AND rden.RESERVATION_DATE = rde.RESERVATION_DATE
+            AND rden.RESV_DAILY_EL_SEQ = rde.RESV_DAILY_EL_SEQ
+          WHERE rden.RESORT = 'VINES'
+        ) rm ON rnx.RESV_NAME_ID = rm.RESV_NAME_ID AND rm.rn = 1
+        WHERE rnx.RESORT = 'VINES'
+          AND rnx.RESV_STATUS IN ('RESERVED','CHECKED IN','CHECKED OUT')
+          AND rnx.BEGIN_DATE <= ADD_MONTHS(TRUNC(SYSDATE), 2)
       ) rn ON n.NAME_ID = rn.NAME_ID AND rn.rn = 1
       WHERE n.NAME_ID IN (${placeholders.join(',')})
     `, binds);
 
     for (const row of rows) {
+      // Skip Posting Master rooms (e.g. "PM01") — not real guest rooms
+      const room = (row.ROOM || '').trim().toUpperCase();
+      if (room && EXCLUDED_ROOM_PREFIXES.some(p => room.startsWith(p))) {
+        continue;
+      }
+
       // Skip staff/company/owner emails entirely — not guests
       const rawEmail = (row.EMAIL || '').trim();
       const emailLower = rawEmail.toLowerCase();
@@ -110,7 +131,7 @@ async function queryGuestsByIds(oracleClient, nameIds, { skipSmtpVerify = false 
             firstName: (row.FIRST || '').trim(),
             lastName: (row.LAST || '').trim(),
             operaId: String(row.NAME_ID),
-            reason: 'invalid-email',
+            reason: emailInvalidReason(rawEmail) || 'invalid-email',
             checkIn: checkInStr,
             checkOut: checkOutStr,
             resvStatus: row.RESV_STATUS || ''
@@ -444,12 +465,17 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       continue;
     }
 
+    const villa = (row.ROOM || '').trim() || null;
+
+    // Skip Posting Master rooms (e.g. "PM01", "PM02") — not real guest rooms
+    if (villa && EXCLUDED_ROOM_PREFIXES.some(p => villa.toUpperCase().startsWith(p))) {
+      continue;
+    }
+
     const checkInDate = row.CHECK_IN || '';
     const checkOutDate = row.CHECK_OUT || '';
     const resvNameId = row.RESV_NAME_ID;
     const parentId = row.PARENT_RESV_NAME_ID;
-
-    const villa = (row.ROOM || '').trim() || null;
     const adults = row.ADULTS != null ? Number(row.ADULTS) : null;
     const children = row.CHILDREN != null ? Number(row.CHILDREN) : null;
 
@@ -476,7 +502,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     const cleanedEmail = sanitizeEmail(rawEmail);
     let badReason = null;
     if (!cleanedEmail) {
-      badReason = rawEmail ? 'invalid-email' : 'no-email';
+      badReason = emailInvalidReason(rawEmail) || 'invalid-email';
     } else {
       const agentCat = isAgentEmail({ email: cleanedEmail, firstName });
       if (agentCat) badReason = agentCat;
