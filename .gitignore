@@ -31,6 +31,12 @@ Thumbs.db
 reports/
 scripts/output/
 
+# OPERA data dumps
+opera-dump/
+opera-dump-all/
+opera-dump-*.csv
+opera-dump-*.zip
+
 dist/deploy/opera-sync.exe
 dist/opera-*.exe
 dist/nssm.exe
