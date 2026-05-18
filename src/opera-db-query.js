@@ -21,6 +21,13 @@ const EXCLUDED_EMAILS = (process.env.EXCLUDED_EMAILS || '')
 const EXCLUDED_ROOM_PREFIXES = (process.env.EXCLUDED_ROOM_PREFIXES || 'PM')
   .split(',').map(p => p.trim().toUpperCase()).filter(Boolean);
 
+// Posting Masters also appear as numeric "villas" in the 9000s (e.g. 9041).
+// They are charge-tracking accounts, not real guest stays — no email needed.
+function isPostingMasterVilla(villa) {
+  if (!villa) return false;
+  return /^9\d{3}$/.test(String(villa).trim());
+}
+
 /**
  * Format a JS Date as YYYY-MM-DD for Salesforce
  */
@@ -448,6 +455,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   const departures = [];
   const arrivalsToday = [];
   const arrivalsTomorrow = [];
+  const postingMasters = [];
 
   for (const row of rows) {
     const rawEmail = (row.EMAIL || '').trim();
@@ -553,6 +561,13 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     delete guest.parentId;
     delete guest.companions;
 
+    // Posting Masters (9000-series villas) are charge-tracking accounts, not
+    // real stays — surface separately and skip badEmails/regular sections.
+    if (isPostingMasterVilla(guest.villa)) {
+      postingMasters.push({ ...guest });
+      continue;
+    }
+
     if (badReason && isOnProperty) {
       badEmails.push({ ...guest });
     }
@@ -575,6 +590,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   departures.sort(byName);
   arrivalsToday.sort(byName);
   arrivalsTomorrow.sort(byName);
+  postingMasters.sort(byName);
 
   const report = {
     date: dateStr,
@@ -582,10 +598,11 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     inHouse,
     departures,
     arrivalsToday,
-    arrivalsTomorrow
+    arrivalsTomorrow,
+    postingMasters
   };
 
-  logger.info(`Front desk report: ${badEmails.length} bad emails, ${inHouse.length} in-house, ${departures.length} departures, ${arrivalsToday.length} arrivals today, ${arrivalsTomorrow.length} arrivals tomorrow`);
+  logger.info(`Front desk report: ${badEmails.length} bad emails, ${inHouse.length} in-house, ${departures.length} departures, ${arrivalsToday.length} arrivals today, ${arrivalsTomorrow.length} arrivals tomorrow, ${postingMasters.length} posting masters`);
 
   return report;
 }
