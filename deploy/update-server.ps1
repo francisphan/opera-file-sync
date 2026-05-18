@@ -1,4 +1,4 @@
-# Opera Sync — Download latest build and restart service
+# Opera Sync - Download latest build and restart service
 # Manual: double-click or run from PowerShell
 # Unattended (Task Scheduler): pass -Unattended to suppress prompts
 # Force: pass -Force to redeploy even if release marker matches
@@ -56,7 +56,7 @@ $assetMarker = "$($asset.id):$($asset.updated_at)"
 if (-not $Force -and (Test-Path $markerFile)) {
     $lastMarker = (Get-Content $markerFile -Raw).Trim()
     if ($lastMarker -eq $assetMarker) {
-        Write-Host "No new release — already on asset $($asset.id) ($($asset.updated_at)). Skipping." -ForegroundColor Gray
+        Write-Host "No new release - already on asset $($asset.id) ($($asset.updated_at)). Skipping." -ForegroundColor Gray
         Exit-Script 0
     }
 }

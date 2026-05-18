@@ -2,7 +2,7 @@
 # twice a week and auto-deploys via update-server.ps1.
 #
 # Run ONCE as Administrator after copying update-server.ps1 to $installDir.
-# Re-running is safe — it replaces any existing task with the same name.
+# Re-running is safe - it replaces any existing task with the same name.
 #
 # Manual triggers (no scheduled task changes needed):
 #   Start-ScheduledTask -TaskName OperaSyncAutoDeploy     # run a poll now
@@ -50,7 +50,7 @@ $trigger = New-ScheduledTaskTrigger `
     -DaysOfWeek $DaysOfWeek `
     -At $TimeOfDay
 
-# Run as SYSTEM — no password needed, has full disk access, matches NSSM service context
+# Run as SYSTEM - no password needed, has full disk access, matches NSSM service context
 $taskPrincipal = New-ScheduledTaskPrincipal `
     -UserId "SYSTEM" `
     -LogonType ServiceAccount `
