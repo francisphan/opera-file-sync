@@ -370,6 +370,141 @@ async function discoverReservationColumns(oracleClient) {
 }
 
 /**
+ * Drop dated entries that fall outside the [checkIn, checkOut] window.
+ *
+ * Profile-level notes (NAME$NOTES / NAME_COMMENT) accumulate over many years of
+ * stays and often contain timestamped logs (incidents, welcome-amenity history)
+ * tagged with leading dates in Argentine DD-MM-YY or DD/MM/YYYY format.
+ *
+ * Algorithm: split the note text into chunks where each chunk starts at a line
+ * whose first token is a date. Lines without a leading date attach to the
+ * preceding chunk (or to a leading "header" chunk if before any dated line).
+ * Drop chunks whose date is outside the stay window; keep undated chunks.
+ *
+ * Reservation-scoped sources are not passed through this — they apply by
+ * definition to the current stay regardless of any dates in their text.
+ */
+function filterNoteByStayWindow(labeledNote, checkIn, checkOut) {
+  if (!labeledNote || !checkIn || !checkOut) return labeledNote || null;
+
+  const labelMatch = labeledNote.match(/^(\[[^\]]+\]\s*)/);
+  const prefix = labelMatch ? labelMatch[0] : '';
+  const content = labeledNote.slice(prefix.length);
+
+  const dateRegex = /^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b/;
+  const lines = content.split('\n');
+  const chunks = [];
+  let current = { date: null, lines: [] };
+
+  for (const line of lines) {
+    const m = line.match(dateRegex);
+    if (m) {
+      if (current.lines.length > 0 || current.date) chunks.push(current);
+      const day = String(m[1]).padStart(2, '0');
+      const mon = String(m[2]).padStart(2, '0');
+      let year = parseInt(m[3], 10);
+      if (year < 100) year += 2000;
+      current = { date: `${year}-${mon}-${day}`, lines: [line] };
+    } else {
+      current.lines.push(line);
+    }
+  }
+  if (current.lines.length > 0 || current.date) chunks.push(current);
+
+  const kept = chunks.filter(c => {
+    if (!c.date) return true;
+    return c.date >= checkIn && c.date <= checkOut;
+  });
+
+  if (kept.length === 0) return null;
+  const filtered = kept.map(c => c.lines.join('\n')).join('\n').trim();
+  return filtered ? prefix + filtered : null;
+}
+
+/**
+ * Fetch guest notes from all four OPERA sources, grouped by NAME_ID and RESV_NAME_ID.
+ *
+ * Sources:
+ *   1. NAME_COMMENT (COMMENT_TYPE='PROF')         — profile preferences
+ *   2. NAME$NOTES (any active NOTE_CODE)          — profile-level free-form notes
+ *      Common codes: PREF (allergies/preferences), INCONV (incidents), GUESTPROF (bio)
+ *   3. RESERVATION_COMMENT (RESERVATION/CASHIER/IN HOUSE) — per-reservation comments
+ *   4. RESERVATION_ALERTS                          — per-reservation action alerts
+ *
+ * Each note is labeled with a short tag (e.g. "[PREF]", "[CASHIER]", "[Alert Check-Out]")
+ * so the front desk can tell sources apart when they're merged into a single notes string.
+ */
+async function fetchGuestNotes(oracleClient, nameIds, resvIds) {
+  const notesByNameId = new Map();
+  const notesByResvId = new Map();
+  const push = (map, key, label, text) => {
+    if (!text) return;
+    const trimmed = String(text).trim();
+    if (!trimmed) return;
+    const arr = map.get(key) || [];
+    arr.push(label ? `[${label}] ${trimmed}` : trimmed);
+    map.set(key, arr);
+  };
+
+  if (nameIds.length > 0) {
+    const binds = Object.fromEntries(nameIds.map((id, i) => [`n${i}`, id]));
+    const holders = nameIds.map((_, i) => `:n${i}`).join(',');
+
+    // NAME_COMMENT — profile preferences (COMMENT_TYPE='PROF', not the dead 'Preferencias' filter)
+    const nc = await oracleClient.query(`
+      SELECT NAME_ID, LINE_NO, COMMENTS
+      FROM OPERA.NAME_COMMENT
+      WHERE NAME_ID IN (${holders})
+        AND COMMENT_TYPE = 'PROF'
+        AND INACTIVE_DATE IS NULL
+      ORDER BY NAME_ID, LINE_NO
+    `, binds);
+    for (const r of nc) push(notesByNameId, r.NAME_ID, 'Prof', r.COMMENTS);
+
+    // NAME$NOTES — free-form profile notes (includes PREF allergies, INCONV, GUESTPROF, etc.)
+    // NOTES is a CLOB — set fetchAsString globally so we get a JS string back.
+    const oracledb = require('oracledb');
+    if (!oracledb.fetchAsString.includes(oracledb.CLOB)) oracledb.fetchAsString.push(oracledb.CLOB);
+    const nn = await oracleClient.query(`
+      SELECT NAME_ID, NOTE_CODE, NOTES
+      FROM OPERA."NAME$NOTES"
+      WHERE NAME_ID IN (${holders})
+        AND INACTIVE_DATE IS NULL
+      ORDER BY NAME_ID, INSERT_DATE
+    `, binds);
+    for (const r of nn) push(notesByNameId, r.NAME_ID, r.NOTE_CODE || 'Note', r.NOTES);
+  }
+
+  if (resvIds.length > 0) {
+    const binds = Object.fromEntries(resvIds.map((id, i) => [`r${i}`, id]));
+    const holders = resvIds.map((_, i) => `:r${i}`).join(',');
+
+    // RESERVATION_COMMENT — broaden to all three VINES types (was only 'RESERVATION')
+    const rc = await oracleClient.query(`
+      SELECT RESV_NAME_ID, COMMENT_TYPE, COMMENTS, INSERT_DATE
+      FROM OPERA.RESERVATION_COMMENT
+      WHERE RESV_NAME_ID IN (${holders})
+        AND RESORT = 'VINES'
+        AND COMMENT_TYPE IN ('RESERVATION', 'CASHIER', 'IN HOUSE')
+      ORDER BY RESV_NAME_ID, INSERT_DATE
+    `, binds);
+    for (const r of rc) push(notesByResvId, r.RESV_NAME_ID, r.COMMENT_TYPE, r.COMMENTS);
+
+    // RESERVATION_ALERTS — front-desk action alerts (Check-In/Check-Out/etc.)
+    const ra = await oracleClient.query(`
+      SELECT RESV_NAME_ID, AREA, DESCRIPTION
+      FROM OPERA.RESERVATION_ALERTS
+      WHERE RESV_NAME_ID IN (${holders})
+        AND RESORT = 'VINES'
+      ORDER BY RESV_NAME_ID, INSERT_DATE
+    `, binds);
+    for (const r of ra) push(notesByResvId, r.RESV_NAME_ID, `Alert ${r.AREA || ''}`.trim(), r.DESCRIPTION);
+  }
+
+  return { notesByNameId, notesByResvId };
+}
+
+/**
  * Query all guests with active reservations overlapping a target date
  * for the comprehensive daily front desk report.
  *
@@ -391,7 +526,8 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
 
   // Oracle returns dates as YYYY-MM-DD strings via TO_CHAR — no JS Date timezone issues
   // Join through RESERVATION_DAILY_ELEMENT_NAME → RESERVATION_DAILY_ELEMENTS to get Room + Adults/Children
-  // Join NAME_COMMENT for guest preferences, RESERVATION_COMMENT for reservation notes
+  // Notes are fetched separately below from NAME_COMMENT, NAME$NOTES, RESERVATION_COMMENT,
+  // and RESERVATION_ALERTS so we can label each by source and avoid LISTAGG on CLOBs.
   const rows = await oracleClient.query(`
     SELECT n.NAME_ID, n.FIRST, n.LAST, n.LANGUAGE,
            p.PHONE_NUMBER AS EMAIL,
@@ -403,9 +539,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
            daily.CHILDREN,
            rn.RESV_NAME_ID,
            rn.PARENT_RESV_NAME_ID,
-           TO_CHAR(rn.ARRIVAL_ESTIMATE_TIME, 'HH24:MI') AS ETA,
-           prefs.NOTES AS PREF_NOTES,
-           resv_notes.NOTES AS RESV_NOTES
+           TO_CHAR(rn.ARRIVAL_ESTIMATE_TIME, 'HH24:MI') AS ETA
     FROM OPERA.RESERVATION_NAME rn
     JOIN OPERA.NAME n ON rn.NAME_ID = n.NAME_ID
       AND n.NAME_TYPE = 'D'
@@ -424,22 +558,6 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       WHERE rden.RESORT = 'VINES'
         AND rden.RESERVATION_DATE BETWEEN TO_DATE(:dateStr, 'YYYY-MM-DD') AND TO_DATE(:tomorrowStr, 'YYYY-MM-DD')
     ) daily ON rn.RESV_NAME_ID = daily.RESV_NAME_ID AND daily.rn = 1
-    LEFT JOIN (
-      SELECT NAME_ID,
-             LISTAGG(COMMENTS, ' | ') WITHIN GROUP (ORDER BY LINE_NO) AS NOTES
-      FROM OPERA.NAME_COMMENT
-      WHERE COMMENT_TYPE = 'Preferencias'
-        AND INACTIVE_DATE IS NULL
-      GROUP BY NAME_ID
-    ) prefs ON n.NAME_ID = prefs.NAME_ID
-    LEFT JOIN (
-      SELECT RESV_NAME_ID,
-             LISTAGG(COMMENTS, ' | ') WITHIN GROUP (ORDER BY INSERT_DATE) AS NOTES
-      FROM OPERA.RESERVATION_COMMENT
-      WHERE COMMENT_TYPE = 'RESERVATION'
-        AND RESORT = 'VINES'
-      GROUP BY RESV_NAME_ID
-    ) resv_notes ON rn.RESV_NAME_ID = resv_notes.RESV_NAME_ID
     WHERE rn.RESORT = 'VINES'
       AND rn.RESV_STATUS != 'CANCELLED'
       AND TRUNC(rn.BEGIN_DATE) <= TO_DATE(:tomorrowStr, 'YYYY-MM-DD')
@@ -447,6 +565,11 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   `, { dateStr, tomorrowStr });
 
   logger.info(`Front desk report: ${rows.length} raw reservation rows returned`);
+
+  // Fetch notes from all four sources, keyed by NAME_ID / RESV_NAME_ID
+  const nameIds = [...new Set(rows.map(r => r.NAME_ID).filter(Boolean))];
+  const resvIds = [...new Set(rows.map(r => r.RESV_NAME_ID).filter(Boolean))];
+  const { notesByNameId, notesByResvId } = await fetchGuestNotes(oracleClient, nameIds, resvIds);
 
   // Build guest objects, group shared reservations, then categorize
   const allGuests = [];
@@ -502,7 +625,16 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       checkIn: checkInDate,
       checkOut: checkOutDate,
       eta: (row.ETA || '').trim() || null,
-      notes: [row.PREF_NOTES, row.RESV_NOTES].filter(Boolean).map(s => s.trim()).join(' | ') || null,
+      notes: (() => {
+        // Profile-level notes accumulate across stays — strip dated entries
+        // that fall outside this stay's window. Reservation-scoped notes are
+        // already tied to this stay so we pass them through unfiltered.
+        const profileNotes = (notesByNameId.get(row.NAME_ID) || [])
+          .map(n => filterNoteByStayWindow(n, checkInDate, checkOutDate))
+          .filter(Boolean);
+        const resvNotes = notesByResvId.get(row.RESV_NAME_ID) || [];
+        return [...profileNotes, ...resvNotes].join(' | ') || null;
+      })(),
       companions: []
     };
 
