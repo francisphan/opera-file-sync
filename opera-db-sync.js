@@ -247,8 +247,8 @@ async function poll() {
     }
 
   } catch (err) {
-    logger.error('Error during poll:', err.message);
-    if (err.stack) logger.debug(err.stack);
+    logger.error(`Error during poll: ${err.message || err.name || 'unknown'}`);
+    if (err.stack) logger.error(err.stack);
     dailyStats.addError(err);
     try {
       await notifier.notifyFileError('db-poll', err, { stack: err.stack });

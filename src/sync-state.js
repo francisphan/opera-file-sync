@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const logger = require('./logger');
 
-const STATE_FILE = path.resolve(__dirname, '..', 'sync-state.json');
+const STATE_FILE = path.resolve('sync-state.json');
 
 class SyncState {
   constructor() {
