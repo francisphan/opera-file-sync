@@ -7,7 +7,7 @@
  */
 
 const logger = require('./logger');
-const { sanitizeEmail, emailInvalidReason, isAgentEmail, mapLanguageToSalesforce, verifyEmailsSMTP } = require('./guest-utils');
+const { sanitizeEmail, emailInvalidReason, isAgentEmail, isRoleMailbox, mapLanguageToSalesforce, verifyEmailsSMTP } = require('./guest-utils');
 
 const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
 
@@ -160,7 +160,10 @@ async function queryGuestsByIds(oracleClient, nameIds, { skipSmtpVerify = false 
       };
 
       const agentCategory = isAgentEmail(customer);
-      if (agentCategory) {
+      // 'missing-first-name' is a soft signal: surface it for review but let
+      // the record continue to SF sync. Other categories are hard non-guest
+      // records and get skipped from sync entirely.
+      if (agentCategory && agentCategory !== 'missing-first-name') {
         const checkInStr = row.CHECK_IN ? formatDate(row.CHECK_IN) : '';
         const checkOutStr = row.CHECK_OUT ? formatDate(row.CHECK_OUT) : '';
         const isCheckingInToday = checkInStr === todayArg;
@@ -646,6 +649,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     } else {
       const agentCat = isAgentEmail({ email: cleanedEmail, firstName });
       if (agentCat) badReason = agentCat;
+      else if (isRoleMailbox(cleanedEmail)) badReason = 'role-mailbox';
     }
     guest.reason = badReason || undefined;
 
@@ -670,6 +674,30 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       }
     } else {
       primaryGuests.push(g);
+    }
+  }
+
+  // SMTP/MX verification on the survivors — distinguishes unreachable domains
+  // (no MX) and rejected mailboxes (550) from generally-deliverable addresses.
+  // Skipped when SMTP_VERIFY=false. Fails open: network errors leave reason
+  // untouched so the email still flows through normally.
+  if (process.env.SMTP_VERIFY !== 'false') {
+    const eligible = primaryGuests.filter(g => !g.reason && g.email && sanitizeEmail(g.email));
+    const emails = [...new Set(eligible.map(g => g.email.toLowerCase()))];
+    if (emails.length > 0) {
+      logger.info(`Front desk SMTP verify: probing ${emails.length} address(es)...`);
+      try {
+        const results = await verifyEmailsSMTP(emails);
+        let invalidCount = 0, noMxCount = 0;
+        for (const g of eligible) {
+          const status = results.get(g.email.toLowerCase());
+          if (status === 'invalid') { g.reason = 'invalid-mailbox'; invalidCount++; }
+          else if (status === 'no-mx') { g.reason = 'domain-unreachable'; noMxCount++; }
+        }
+        logger.info(`Front desk SMTP verify: ${invalidCount} invalid mailbox(es), ${noMxCount} unreachable domain(s)`);
+      } catch (err) {
+        logger.warn(`Front desk SMTP verify failed (proceeding without): ${err.message}`);
+      }
     }
   }
 

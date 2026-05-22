@@ -368,6 +368,30 @@ class Notifier {
     const { date, badEmails, inHouse, departures, arrivalsToday, arrivalsTomorrow, postingMasters = [] } = reportData;
     const totalGuests = inHouse.length + departures.length + arrivalsToday.length + arrivalsTomorrow.length;
 
+    const describeBadEmailReason = (g) => {
+      const r = g.reason;
+      const labels = {
+        'no email':           'No email on file',
+        'no-email':           'No email on file',
+        'booking-proxy':      'Booking.com proxy address',
+        'expedia-proxy':      'Expedia proxy address',
+        'agent-domain':       'Travel agent / company domain',
+        'missing-first-name': 'Name incomplete (TBC or missing)',
+        'role-mailbox':       'Role mailbox (info@, sales@, reservations@, etc.)',
+        'invalid-mailbox':    'Mailbox does not exist (SMTP rejected)',
+        'domain-unreachable': 'Email domain has no mail server',
+        'invalid-email':      'Invalid email format',
+      };
+      if (!r) return '';
+      const noEmail = r === 'no email' || r === 'no-email';
+      if (labels[r]) {
+        return noEmail || !g.email ? labels[r] : `${labels[r]}: ${g.email}`;
+      }
+      // Free-form reasons from emailInvalidReason() — already include the domain
+      // (e.g. "likely typo of gmail.com (gmial.com)") so we don't append the email.
+      return r;
+    };
+
     if (totalGuests === 0 && badEmails.length === 0 && postingMasters.length === 0) {
       logger.info('Daily front desk report: no guests to report');
       return;
@@ -379,7 +403,7 @@ class Notifier {
     const textLines = [`Daily Front Desk Report — ${date}\n`];
     if (badEmails.length > 0) {
       textLines.push(`PRIORITY: ${badEmails.length} guest(s) need email collection`);
-      badEmails.forEach(g => textLines.push(`  - ${g.firstName} ${g.lastName} (${g.reason}) ${g.email || '(none)'}`));
+      badEmails.forEach(g => textLines.push(`  - ${g.firstName} ${g.lastName} — ${describeBadEmailReason(g) || g.reason || '(unknown)'}`));
       textLines.push('');
     }
     const sections = [
@@ -496,8 +520,7 @@ class Notifier {
             <th style="${thStyle}">Check-out</th>
           </tr>
           ${badEmails.map(g => {
-            const reason = g.reason === 'no-email' ? 'No email on file'
-              : g.email ? `Invalid: ${g.email}` : g.reason;
+            const reason = describeBadEmailReason(g) || g.reason || '(unknown)';
             return `
           <tr>
             <td style="${tdStyle}">${nameCell(g)}</td>

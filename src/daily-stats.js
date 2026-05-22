@@ -70,14 +70,14 @@ class DailyStats {
 
   /**
    * Add skipped records count and details
-   * @param {string} category - Skip category: 'agent', 'company', 'duplicate', 'invalid'
+   * @param {string} category - Skip category: 'agent', 'duplicate', 'invalid'
    * @param {number} count - Number of records skipped
    * @param {Array} [details] - Array of skipped record objects for human review
    */
   addSkipped(category, count, details = []) {
     this.checkDateRollover();
 
-    if (category === 'agent' || category === 'company' || category === 'agent-domain' || category === 'booking-proxy' || category === 'expedia-proxy') {
+    if (category === 'agent' || category === 'agent-domain' || category === 'booking-proxy' || category === 'expedia-proxy') {
       this.stats.skippedAgents += count;
       this.stats.skippedAgentDetails.push(...details);
     } else if (category === 'duplicate' || category === 'duplicate-detected') {

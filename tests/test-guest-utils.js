@@ -10,7 +10,11 @@ const assert = require('node:assert/strict');
 
 const {
   sanitizeEmail,
+  emailInvalidReason,
   isAgentEmail,
+  isRoleMailbox,
+  isDisposableDomain,
+  isProviderTypo,
   mapLanguageToSalesforce,
   transformToContact,
   transformToTVRSGuest,
@@ -215,6 +219,165 @@ describe('sanitizeEmail', () => {
       assert.equal(sanitizeEmail('user@gmail.co.uk'), 'user@gmail.co.uk');
     });
   });
+
+  describe('distance-1 provider typos return null', () => {
+    test('gmial.com (transpose)', () => {
+      assert.equal(sanitizeEmail('user@gmial.com'), null);
+    });
+    test('gnail.com (substitute)', () => {
+      assert.equal(sanitizeEmail('user@gnail.com'), null);
+    });
+    test('gmai.com (delete)', () => {
+      assert.equal(sanitizeEmail('user@gmai.com'), null);
+    });
+    test('hotmial.com', () => {
+      assert.equal(sanitizeEmail('user@hotmial.com'), null);
+    });
+    test('yhoo.com', () => {
+      assert.equal(sanitizeEmail('user@yhoo.com'), null);
+    });
+    test('exact match gmail.com stays valid', () => {
+      assert.equal(sanitizeEmail('user@gmail.com'), 'user@gmail.com');
+    });
+    test('unrelated short domain stays valid', () => {
+      // 'acme.com' is distance > 1 from any known provider — must not trigger
+      assert.equal(sanitizeEmail('user@acme.com'), 'user@acme.com');
+    });
+    test('typo only flagged on .com/.net/.org TLDs', () => {
+      // gmial.studio should pass — TLD gate prevents real-domain false positives
+      assert.equal(sanitizeEmail('user@gmial.studio'), 'user@gmial.studio');
+    });
+  });
+
+  describe('disposable email domains return null', () => {
+    test('mailinator.com', () => {
+      assert.equal(sanitizeEmail('user@mailinator.com'), null);
+    });
+    test('guerrillamail.com', () => {
+      assert.equal(sanitizeEmail('user@guerrillamail.com'), null);
+    });
+    test('yopmail.com', () => {
+      assert.equal(sanitizeEmail('user@yopmail.com'), null);
+    });
+    test('10minutemail.com', () => {
+      assert.equal(sanitizeEmail('user@10minutemail.com'), null);
+    });
+    test('case-insensitive', () => {
+      assert.equal(sanitizeEmail('user@MAILINATOR.com'), null);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// emailInvalidReason — new reason strings
+// ---------------------------------------------------------------------------
+describe('emailInvalidReason', () => {
+  test('returns null for valid email', () => {
+    assert.equal(emailInvalidReason('user@example.com'), null);
+  });
+
+  test('returns "no email" for empty / null input', () => {
+    assert.equal(emailInvalidReason(''), 'no email');
+    assert.equal(emailInvalidReason(null), 'no email');
+  });
+
+  test('returns "likely typo of …" for distance-1 provider typo', () => {
+    assert.equal(
+      emailInvalidReason('user@gmial.com'),
+      'likely typo of gmail.com (gmial.com)'
+    );
+  });
+
+  test('returns "disposable email domain (…)" for disposable provider', () => {
+    assert.equal(
+      emailInvalidReason('user@mailinator.com'),
+      'disposable email domain (mailinator.com)'
+    );
+  });
+
+  test('returns "suspicious provider TLD (…)" for gmail.co', () => {
+    assert.equal(
+      emailInvalidReason('user@gmail.co'),
+      'suspicious provider TLD (gmail.co)'
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isRoleMailbox
+// ---------------------------------------------------------------------------
+describe('isRoleMailbox', () => {
+  test('flags info@', () => {
+    assert.equal(isRoleMailbox('info@somecompany.com'), true);
+  });
+  test('flags reservations@', () => {
+    assert.equal(isRoleMailbox('reservations@hotel.com'), true);
+  });
+  test('flags noreply@ (no dash)', () => {
+    assert.equal(isRoleMailbox('noreply@example.com'), true);
+  });
+  test('flags no-reply@ (with dash)', () => {
+    assert.equal(isRoleMailbox('no-reply@example.com'), true);
+  });
+  test('case-insensitive', () => {
+    assert.equal(isRoleMailbox('INFO@example.com'), true);
+  });
+  test('does not flag regular guest', () => {
+    assert.equal(isRoleMailbox('john@gmail.com'), false);
+  });
+  test('does not flag substring matches in personal local parts', () => {
+    // 'salesman' contains 'sales' but is not the full local part
+    assert.equal(isRoleMailbox('salesman@gmail.com'), false);
+  });
+  test('returns false for non-strings', () => {
+    assert.equal(isRoleMailbox(null), false);
+    assert.equal(isRoleMailbox(''), false);
+    assert.equal(isRoleMailbox(123), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isDisposableDomain
+// ---------------------------------------------------------------------------
+describe('isDisposableDomain', () => {
+  test('flags mailinator.com', () => {
+    assert.equal(isDisposableDomain('user@mailinator.com'), true);
+  });
+  test('case-insensitive', () => {
+    assert.equal(isDisposableDomain('user@MAILINATOR.COM'), true);
+  });
+  test('does not flag gmail.com', () => {
+    assert.equal(isDisposableDomain('user@gmail.com'), false);
+  });
+  test('returns false for malformed input', () => {
+    assert.equal(isDisposableDomain('not-an-email'), false);
+    assert.equal(isDisposableDomain(''), false);
+    assert.equal(isDisposableDomain(null), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isProviderTypo
+// ---------------------------------------------------------------------------
+describe('isProviderTypo', () => {
+  test('detects gmial.com → gmail.com', () => {
+    assert.equal(isProviderTypo('gmial.com'), 'gmail.com');
+  });
+  test('detects hotmial.com → hotmail.com', () => {
+    assert.equal(isProviderTypo('hotmial.com'), 'hotmail.com');
+  });
+  test('exact provider returns null (not a typo of itself)', () => {
+    assert.equal(isProviderTypo('gmail.com'), null);
+  });
+  test('unrelated domain returns null', () => {
+    assert.equal(isProviderTypo('acme.com'), null);
+  });
+  test('only flags .com/.net/.org TLDs', () => {
+    assert.equal(isProviderTypo('gmial.studio'), null);
+  });
+  test('multi-level domain returns null', () => {
+    assert.equal(isProviderTypo('foo.gmail.com'), null);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -239,21 +402,21 @@ describe('isAgentEmail', () => {
     );
   });
 
-  describe('returns company for empty/placeholder firstName', () => {
+  describe('returns missing-first-name for empty/placeholder firstName', () => {
     test('empty firstName', () => {
-      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: '' }), 'company');
+      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: '' }), 'missing-first-name');
     });
 
     test('dot firstName', () => {
-      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: '.' }), 'company');
+      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: '.' }), 'missing-first-name');
     });
 
     test('TBC firstName', () => {
-      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: 'TBC' }), 'company');
+      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: 'TBC' }), 'missing-first-name');
     });
 
     test('whitespace-only firstName is treated as empty', () => {
-      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: '   ' }), 'company');
+      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: '   ' }), 'missing-first-name');
     });
   });
 
@@ -344,16 +507,16 @@ describe('isAgentEmail', () => {
       assert.equal(isAgentEmail({ email: undefined, firstName: 'John' }), null);
     });
 
-    test('null firstName treated as empty → company', () => {
-      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: null }), 'company');
+    test('null firstName treated as empty → missing-first-name', () => {
+      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: null }), 'missing-first-name');
     });
 
-    test('undefined firstName treated as empty → company', () => {
-      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: undefined }), 'company');
+    test('undefined firstName treated as empty → missing-first-name', () => {
+      assert.equal(isAgentEmail({ email: 'info@hotel.com', firstName: undefined }), 'missing-first-name');
     });
 
     test('missing both fields', () => {
-      assert.equal(isAgentEmail({}), 'company');
+      assert.equal(isAgentEmail({}), 'missing-first-name');
     });
   });
 });

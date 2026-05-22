@@ -22,6 +22,106 @@ const AGENT_DOMAIN_KEYWORDS = [
   'centurioncard', 'vendor@'
 ];
 
+const KNOWN_PROVIDERS = ['gmail', 'yahoo', 'hotmail', 'outlook', 'aol', 'icloud', 'mail'];
+
+const DISPOSABLE_DOMAINS = new Set([
+  'mailinator.com', 'guerrillamail.com', 'guerrillamail.net',
+  'sharklasers.com', 'tempmail.com', 'tempmail.io',
+  '10minutemail.com', '10minutemail.net', '10minutemail.org',
+  'throwawaymail.com', 'yopmail.com', 'yopmail.fr',
+  'trashmail.com', 'dispostable.com', 'getnada.com',
+  'mintemail.com', 'maildrop.cc', 'fakeinbox.com', 'tempr.email',
+  'mailnesia.com', 'spamgourmet.com', 'meltmail.com',
+  'spam4.me', 'mohmal.com', 'tempinbox.com'
+]);
+
+const ROLE_MAILBOX_LOCAL_PARTS = new Set([
+  'info', 'admin', 'administrator', 'support', 'help', 'helpdesk',
+  'hello', 'contact', 'contacts', 'inquiry', 'inquiries', 'enquiry', 'enquiries',
+  'noreply', 'no-reply', 'donotreply', 'do-not-reply',
+  'sales', 'marketing', 'office', 'team', 'staff',
+  'postmaster', 'abuse', 'webmaster', 'hostmaster',
+  'reservations', 'reservation', 'booking', 'bookings'
+]);
+
+/**
+ * Returns true if strings a and b differ by exactly one Damerau-Levenshtein edit:
+ * single substitute, single insert, single delete, or single adjacent transposition
+ * (e.g. 'gmial' ↔ 'gmail' counts as one edit).
+ */
+function distanceOne(a, b) {
+  if (a === b) return false;
+  const la = a.length, lb = b.length;
+
+  if (la === lb) {
+    // Collect mismatch positions; either 1 (substitute) or 2 adjacent swapped (transpose)
+    const diffs = [];
+    for (let i = 0; i < la; i++) {
+      if (a[i] !== b[i]) diffs.push(i);
+      if (diffs.length > 2) return false;
+    }
+    if (diffs.length === 1) return true;
+    if (diffs.length === 2 && diffs[1] === diffs[0] + 1 &&
+        a[diffs[0]] === b[diffs[1]] && a[diffs[1]] === b[diffs[0]]) {
+      return true;
+    }
+    return false;
+  }
+
+  if (Math.abs(la - lb) !== 1) return false;
+  const longer = la > lb ? a : b;
+  const shorter = la > lb ? b : a;
+  let i = 0, j = 0;
+  while (i < shorter.length && j < longer.length) {
+    if (shorter[i] !== longer[j]) {
+      if (i !== j) return false;
+      j++;                                // skip one char in the longer string
+    } else { i++; j++; }
+  }
+  return true;
+}
+
+/**
+ * Detect domains that look like distance-1 typos of well-known consumer providers
+ * paired with a normal TLD (gmial.com, hotmial.com, yhoo.com, etc.). Conservative
+ * by design — only matches when the TLD is .com/.net/.org so we don't false-positive
+ * on real domains like `gmial.studio`.
+ */
+function isProviderTypo(domain) {
+  const parts = domain.toLowerCase().split('.');
+  if (parts.length !== 2) return null;
+  const [sl, tld] = parts;
+  if (!['com', 'net', 'org'].includes(tld)) return null;
+  if (KNOWN_PROVIDERS.includes(sl)) return null;  // exact match — not a typo
+  for (const p of KNOWN_PROVIDERS) {
+    if (distanceOne(sl, p)) return `${p}.com`;
+  }
+  return null;
+}
+
+/**
+ * Returns true if the local part is a generic role/system mailbox
+ * (info@, noreply@, sales@, reservations@, etc.). These are deliverable
+ * but rarely a real guest's personal address.
+ */
+function isRoleMailbox(email) {
+  if (!email || typeof email !== 'string') return false;
+  const at = email.indexOf('@');
+  if (at <= 0) return false;
+  const local = email.substring(0, at).toLowerCase();
+  return ROLE_MAILBOX_LOCAL_PARTS.has(local);
+}
+
+/**
+ * Returns true if the email's domain is a known disposable / temporary mail provider.
+ */
+function isDisposableDomain(email) {
+  if (!email || typeof email !== 'string') return false;
+  const at = email.indexOf('@');
+  if (at <= 0) return false;
+  return DISPOSABLE_DOMAINS.has(email.substring(at + 1).toLowerCase());
+}
+
 /**
  * Validate email addresses - no auto-fixing, just validation
  * Any issues are flagged for manual review in the daily report
@@ -70,14 +170,19 @@ function sanitizeEmail(email) {
 
   // Suspicious: known email providers with short TLDs (likely typos)
   const secondLevel = domainParts[domainParts.length - 2];
-  const knownProviders = ['gmail', 'yahoo', 'hotmail', 'outlook', 'aol', 'icloud', 'mail'];
   const suspiciousTLDs = ['co', 'me', 'tv', 'io', 'to'];
 
   if (domainParts.length === 2 &&
-      knownProviders.includes(secondLevel?.toLowerCase()) &&
+      KNOWN_PROVIDERS.includes(secondLevel?.toLowerCase()) &&
       suspiciousTLDs.includes(tld.toLowerCase())) {
     return null;
   }
+
+  // Distance-1 typos of well-known providers (gmial.com, hotmial.com, yhoo.com)
+  if (isProviderTypo(domain)) return null;
+
+  // Known disposable / temp-mail providers
+  if (DISPOSABLE_DOMAINS.has(domain.toLowerCase())) return null;
 
   // Valid - return as-is (no modifications)
   return cleaned;
@@ -111,22 +216,35 @@ function emailInvalidReason(email) {
   if (tld.length < 2 || tld.length > 6 || !/^[a-z0-9]+$/i.test(tld)) return `invalid TLD (.${tld})`;
 
   const secondLevel = domainParts[domainParts.length - 2];
-  const knownProviders = ['gmail', 'yahoo', 'hotmail', 'outlook', 'aol', 'icloud', 'mail'];
   const suspiciousTLDs = ['co', 'me', 'tv', 'io', 'to'];
 
   if (domainParts.length === 2 &&
-      knownProviders.includes(secondLevel?.toLowerCase()) &&
+      KNOWN_PROVIDERS.includes(secondLevel?.toLowerCase()) &&
       suspiciousTLDs.includes(tld.toLowerCase())) {
     return `suspicious provider TLD (${domain})`;
   }
+
+  const typoOf = isProviderTypo(domain);
+  if (typoOf) return `likely typo of ${typoOf} (${domain})`;
+
+  if (DISPOSABLE_DOMAINS.has(domain.toLowerCase())) return `disposable email domain (${domain})`;
 
   return null;
 }
 
 /**
- * Check if a customer record looks like a travel agent or non-guest
+ * Check if a customer record looks like a travel agent, non-guest, or
+ * incomplete profile.
+ *
+ * Returns one of: 'booking-proxy', 'expedia-proxy', 'agent-domain',
+ * 'missing-first-name', or null.
+ *
+ * NOTE: 'missing-first-name' is a *soft* signal — surface it in the front
+ * desk report but don't block SF sync on it. The other three are hard
+ * signals (not real guest records).
+ *
  * @param {Object} customer - Customer data with email and firstName fields
- * @returns {string|null} Category string if agent, null if guest
+ * @returns {string|null} Category string if agent / incomplete, null if normal guest
  */
 function isAgentEmail(customer) {
   const email = (customer.email || '').toLowerCase();
@@ -135,7 +253,7 @@ function isAgentEmail(customer) {
   if (email.indexOf('guest.booking.com') !== -1) return 'booking-proxy';
   if (email.indexOf('expediapartnercentral.com') !== -1) return 'expedia-proxy';
 
-  if (firstName === '' || firstName === '.' || firstName === 'TBC') return 'company';
+  if (firstName === '' || firstName === '.' || firstName === 'TBC') return 'missing-first-name';
 
   // Match keywords against domain part only to avoid false positives
   // (e.g., 'preserv@gmail.com' should NOT match 'reserv')
@@ -391,8 +509,8 @@ async function verifyEmailsSMTP(emails) {
   const domainChecks = [...byDomain.entries()].map(async ([domain, domainEmails]) => {
     const mxHost = await resolveMx(domain);
     if (!mxHost) {
-      // Can't resolve MX — mark all as unknown (fail open)
-      for (const e of domainEmails) results.set(e, 'unknown');
+      // No MX record — mail to this domain will bounce
+      for (const e of domainEmails) results.set(e, 'no-mx');
       return;
     }
 
@@ -409,9 +527,14 @@ async function verifyEmailsSMTP(emails) {
 
 module.exports = {
   AGENT_DOMAIN_KEYWORDS,
+  DISPOSABLE_DOMAINS,
+  ROLE_MAILBOX_LOCAL_PARTS,
   sanitizeEmail,
   emailInvalidReason,
   isAgentEmail,
+  isRoleMailbox,
+  isDisposableDomain,
+  isProviderTypo,
   transformToContact,
   transformToTVRSGuest,
   mapLanguageToSalesforce,
