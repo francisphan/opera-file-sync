@@ -1,33 +1,30 @@
-# OPERA File Sync → Salesforce
+# OPERA Sync → Salesforce
 
-Syncs OPERA PMS guest records to the `TVRS_Guest__c` custom object in Salesforce. Supports both **file-based sync** (CSV exports) and **database-based sync** (Oracle CQN events).
+Syncs OPERA PMS guest records to the `TVRS_Guest__c` custom object in Salesforce by polling the OPERA Oracle database directly.
 
 **Key Features:**
-- Intelligent duplicate detection with probability scoring
-- Automated daily summary reports (email + Slack)
-- Phone and language field support via Oracle database
-- Real-time sync via Oracle CQN or scheduled CSV processing
+- Two-phase sync: Contact lookup/create, then `TVRS_Guest__c` upsert with diffing
+- Automated daily summary and front desk reports (email + Slack)
+- Phone and language field support from the Oracle database
+- Google Sheets population for checkout-survey and check-in arrivals
+- Andon cord kill switch to pause Salesforce writes without stopping the process
 
 ## How It Works
 
 ```
-OPERA Server (scheduled export)
-    ↓
-D:\MICROS\opera\export\OPERA\vines\
-    customers20260213.csv + invoices20260213.csv
-    ↓ (file watcher detects new customers*.csv)
-opera-sync.exe
-    ↓ (joins customers + invoices by Opera Internal ID)
-    ↓ (transforms & upserts via Email__c)
-Salesforce TVRS_Guest__c
+OPERA Oracle DB (OPERA.NAME_PHONE, OPERA.RESERVATION_NAME, ...)
+    ↓ (poll for guests changed since last watermark)
+opera-db-sync.js
+    ↓ (transform Oracle rows via guest-utils)
+    ↓ Phase 1: Contact lookup by Email__c → create only (never updates existing)
+    ↓ Phase 2: TVRS_Guest__c query by Contact + Check_In_Date__c → diff → create/update
+Salesforce
 ```
 
-1. OPERA exports `customers*.csv` and `invoices*.csv` to the vines directory
-2. The watcher detects new `customers*.csv` files and automatically finds matching `invoices*.csv`
-3. Records are joined on Opera Internal ID, transformed, and upserted to Salesforce
-4. Processed files move to `processed/`, failures move to `failed/` with email alerts
-
-**Note:** On first startup, the watcher processes all existing files in the export directory. On subsequent runs, files already recorded in `processed-files.json` are skipped (matched by filename).
+1. The poller queries the OPERA Oracle DB for guests with email or reservation changes since the last sync watermark (`sync-state.json`), plus upcoming arrivals.
+2. Rows are transformed and split into two phases: Contacts are created (existing ones are left untouched), then `TVRS_Guest__c` records are upserted using a diff to avoid no-op writes.
+3. Guests still missing a valid email are routed to the front desk report for manual collection.
+4. Checkout-survey and check-in arrival rows are appended to the configured Google Sheets.
 
 ## Fields Synced
 
@@ -41,74 +38,39 @@ Salesforce TVRS_Guest__c
 | Billing Country | `Country__c` | |
 | Phone Number | `Telephone__c` | From Oracle DB (MOBILE prioritized) |
 | Language | `Language__c` | From Oracle DB, mapped to picklist |
-| Check in (from invoices) | `Check_In_Date__c` | |
-| Check out (from invoices) | `Check_Out_Date__c` | |
+| Check in | `Check_In_Date__c` | |
+| Check out | `Check_Out_Date__c` | |
 
 **Language Mapping:** Oracle language codes → Salesforce picklist (English, Spanish, Portuguese, Unknown)
 
-Records without a valid email address are skipped. All required boolean fields on TVRS_Guest__c are set to `false`.
-
-## Sync Modes
-
-### File-Based Sync (opera-file-sync.js)
-Watches for CSV exports and processes them automatically. Ideal for OPERA installations without OXI license.
-
-```bash
-npm start              # File sync mode
-npm run build:exe      # Build opera-sync-file.exe
-```
-
-### Database-Based Sync (opera-db-sync.js)
-Connects directly to Oracle database via Continuous Query Notification (CQN) for real-time updates. Includes phone and language field support.
-
-```bash
-npm run start:db       # DB sync mode
-npm run build:exe:db   # Build opera-sync-db.exe
-```
+Records without a valid email address are skipped (and surfaced in the front desk report). All required boolean fields on `TVRS_Guest__c` are set to `false`.
 
 ## Key Features
 
-### 1. Duplicate Detection
-Automatically detects likely duplicates before syncing to Salesforce using probability scoring:
-- **Name uniqueness** (30%): Rare names = higher probability
-- **Location match** (20%): Same city increases score
-- **Check-in proximity** (20%): Similar dates = likely same person
-- **Email domain** (15%): Same domain boosts probability
-- **Country/State** (10% + 5%): Geographic indicators
+### 1. Daily Summary & Front Desk Reports
+Automated emails sent on a schedule (Argentina Time, configurable) showing records uploaded, skipped (agents/invalid), front-desk follow-ups, and errors.
 
-**Behavior:**
-- ≥75% probability: **Skip** and notify for human review
-- 50-74% probability: **Sync** with warning logged
-- <50% probability: **Sync** normally
-
-Configure via `.env`:
-```bash
-ENABLE_DUPLICATE_DETECTION=true
-DUPLICATE_THRESHOLD=75
-DUPLICATE_CACHE_TTL=3600000  # 1 hour cache
-```
-
-### 2. Daily Summary Reports
-Automated email reports sent at 9:00 AM Argentina Time (configurable) showing:
-- Records uploaded to Salesforce
-- Records skipped (agents, duplicates, invalid data)
-- Errors encountered with details
-- All-time file processing statistics
-
-Configure via `.env`:
 ```bash
 ENABLE_DAILY_SUMMARY=true
 DAILY_SUMMARY_TIME=9:00
 DAILY_SUMMARY_TIMEZONE=America/Argentina/Buenos_Aires
+FRONT_DESK_EMAIL_TO=frontdesk@yourcompany.com
+FRONT_DESK_EMAIL_TIME=7:00
 ```
 
-### 3. Agent Filtering
-Automatically excludes travel agents and booking service records based on:
+### 2. Agent Filtering
+Automatically excludes travel agents and booking-service records based on:
 - Known agent/OTA domains (booking.com, expedia, smartflyer, etc.)
 - Email patterns indicating business accounts
 - Missing or placeholder first names (TBC, ".", empty)
 
 Skipped records are logged separately for tracking purposes.
+
+### 3. Andon Cord (Kill Switch)
+Set `ANDON_CORD=true` to pause **all** Salesforce activity without stopping the process. It skips the startup connection test (no error email, no crash-loop) and skips each poll's Salesforce write while holding the sync watermark, so the backlog replays to Salesforce once you unset it and restart. Oracle polling, front desk reports, daily summary, and Google Sheets sync keep running.
+
+### 4. Duplicate Reporting
+A standalone duplicate report (`npm run report:duplicates`) scores likely duplicate guests using name, location, check-in proximity, and email-domain signals. See `scripts/duplicate-report.js`.
 
 ## Setup
 
@@ -124,15 +86,15 @@ npm install
 node get-refresh-token.js
 ```
 
-Set `SF_CLIENT_ID` and `SF_CLIENT_SECRET` in your environment or edit the file directly. The script opens a browser for Salesforce login and returns a refresh token.
+Set `SF_CLIENT_ID` and `SF_CLIENT_SECRET` in your environment first. The script opens a browser for Salesforce login and returns a refresh token.
 
 ### 3. Get Gmail OAuth Credentials (for email alerts)
 
 ```bash
-node get-gmail-oauth-token.js
+node get-google-oauth-token.js
 ```
 
-Set `GMAIL_CLIENT_ID` and `GMAIL_CLIENT_SECRET` in your environment or edit the file directly. The script opens a browser for Google authorization and returns a refresh token.
+Set `GMAIL_CLIENT_ID` and `GMAIL_CLIENT_SECRET` first. The script opens a browser for Google authorization and returns a refresh token.
 
 ### 4. Configure .env
 
@@ -149,10 +111,12 @@ SF_CLIENT_ID=your-client-id
 SF_CLIENT_SECRET=your-client-secret
 SF_REFRESH_TOKEN=your-refresh-token
 
-# OPERA export paths
-EXPORT_DIR=D:\MICROS\opera\export\OPERA\vines
-PROCESSED_DIR=D:\MICROS\opera\export\OPERA\vines\processed
-FAILED_DIR=D:\MICROS\opera\export\OPERA\vines\failed
+# OPERA Oracle Database
+ORACLE_HOST=your-oracle-host
+ORACLE_PORT=1521
+ORACLE_SID=OPERA
+ORACLE_USER=opera_user
+ORACLE_PASSWORD=your_password
 
 # Gmail OAuth (for error notifications)
 SMTP_USER=your-email@gmail.com
@@ -163,109 +127,48 @@ EMAIL_FROM=OPERA Sync <your-email@gmail.com>
 EMAIL_TO=admin@example.com
 ```
 
-**Additional Configuration (Optional):**
-
-```bash
-# Duplicate Detection
-ENABLE_DUPLICATE_DETECTION=true
-DUPLICATE_THRESHOLD=75              # Skip if probability >= 75%
-DUPLICATE_CACHE_TTL=3600000         # 1 hour Salesforce cache
-
-# Daily Summary Reports
-ENABLE_DAILY_SUMMARY=true
-DAILY_SUMMARY_TIME=9:00
-DAILY_SUMMARY_TIMEZONE=America/Argentina/Buenos_Aires
-
-# Oracle Database (for DB sync mode + phone/language fields)
-ORACLE_USER=opera_user
-ORACLE_PASSWORD=your_password
-ORACLE_CONNECTION_STRING=host:port/servicename
-
-# Feature Flags
-SYNC_PHONE_FIELD=true
-SYNC_LANGUAGE_FIELD=true
-
-# Slack Notifications (optional)
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
-```
-
-See `.env.example` for all available options including batch size, log level, and notification thresholds.
+See `.env.example` for all available options including batch size, log level, notification thresholds, feature flags, and Google Sheets integration.
 
 ### 5. Test
 
 ```bash
-# Test Salesforce connection
-npm run test
-
-# Test Oracle database connection (for DB sync mode)
-npm run test:oracle
-
-# Test email notifications
-npm run test:notifications
-
-# Test duplicate detection with known duplicates
-node test-duplicate-detection.js
-
-# Test phone and language field sync
-node test-phone-language.js
-
-# Test daily summary email
-node test-daily-summary.js
+npm test                  # Unit tests (guest-utils + core logic)
+npm run test:integration  # Salesforce connectivity
+npm run test:oracle       # Oracle connectivity
+npm run test:notifications # Email/Slack alerts
 ```
 
 ### 6. Run
 
 ```bash
-# File-based sync (CSV watching)
-npm start
-
-# Database-based sync (Oracle CQN)
-npm run start:db
+npm start                 # Start the Oracle polling sync
+npm run dry-run           # Process without uploading to Salesforce
 ```
 
 ## Deployment (Windows Server)
 
-### Build Executables
+### Build the Executable
 
 ```bash
-# Build file-based sync executable
-npm run build:exe
-
-# Build database-based sync executable
-npm run build:exe:db
-
-# Build both
-npm run build:all
+npm run build
 ```
 
-This creates:
-- `dist/opera-sync-file.exe` — File-based sync (CSV watching)
-- `dist/opera-sync-db.exe` — Database-based sync (Oracle CQN with phone/language)
-
-Both are standalone Windows executables that do not require Node.js.
+This produces `dist/opera-sync-db.exe` — a standalone Windows executable that does not require Node.js.
 
 ### Deploy to OPERA Server
 
-**File-based sync:**
-```
-D:\opera-sync\
-├── opera-sync-file.exe
-└── .env
-```
-
-**Database-based sync:**
 ```
 D:\opera-sync\
 ├── opera-sync-db.exe
-└── .env  (must include ORACLE_* credentials)
+└── .env   (must include SF_* , ORACLE_* , and GMAIL_* credentials)
 ```
 
-### Run as Windows Service (Optional)
+### Run as Windows Service
 
 Use [NSSM](https://nssm.cc/) to run as a background service that starts automatically:
 
 ```powershell
-nssm install OPERASync D:\opera-sync\opera-sync.exe
+nssm install OPERASync D:\opera-sync\opera-sync-db.exe
 nssm set OPERASync AppDirectory D:\opera-sync
 nssm start OPERASync
 ```
@@ -286,45 +189,33 @@ On the server, logs are at `D:\opera-sync\logs\`.
 
 ```
 opera-file-sync/
-├── opera-file-sync.js              # File-based sync entry point
-├── opera-db-sync.js                # Database-based sync entry point
+├── opera-db-sync.js                # Entry point — Oracle polling sync
 ├── src/
-│   ├── salesforce-client.js        # Salesforce API (jsforce v3, OAuth2)
-│   ├── notifier.js                 # Email/Slack notifications (Gmail OAuth2)
-│   ├── logger.js                   # Winston logging
-│   ├── file-tracker.js             # File processing tracking
-│   ├── duplicate-detector.js       # Duplicate detection with probability scoring
-│   ├── daily-stats.js              # Daily statistics tracking
-│   ├── scheduler.js                # node-schedule for daily reports
-│   ├── guest-utils.js              # Shared guest utilities (agent filtering, transformations)
-│   ├── opera-db-query.js           # Oracle database queries (phone, language)
+│   ├── salesforce-client.js        # Salesforce API (jsforce v3, OAuth2) + syncGuestCheckIns
+│   ├── opera-db-query.js           # Oracle database queries (guests, phone, language, front desk)
 │   ├── oracle-client.js            # Oracle connection management
-│   ├── sync-state.js               # Sync state tracking for DB mode
-│   └── parsers/
-│       ├── opera-parser.js         # OPERA CSV parser (customers + invoices join)
-│       ├── csv-parser.js           # Generic CSV parser (fallback)
-│       └── xml-parser.js           # XML parser (fallback)
+│   ├── guest-utils.js              # Shared guest utilities (agent filtering, transforms, diffing)
+│   ├── sync-state.js               # Sync watermark persistence (sync-state.json)
+│   ├── notifier.js                 # Email/Slack notifications (Gmail OAuth2)
+│   ├── sheets-client.js            # Google Sheets checkout/check-in population
+│   ├── scheduler.js                # node-schedule for daily summary + front desk reports
+│   ├── daily-stats.js              # Daily statistics tracking (daily-stats.json)
+│   ├── duplicate-detector.js       # Duplicate scoring (used by the duplicate report)
+│   └── logger.js                   # Winston logging
+├── scripts/                        # Dry-run, duplicate report, and operational utilities
+├── tests/                          # Connection, notification, and unit tests
 ├── get-refresh-token.js            # Salesforce OAuth token generator
-├── get-gmail-oauth-token.js        # Gmail OAuth token generator
+├── get-google-oauth-token.js       # Gmail OAuth token generator
 ├── get-sf-schema.js                # Salesforce schema discovery tool
-├── test-connection.js              # Test Salesforce connectivity
-├── test-oracle-connection.js       # Test Oracle connectivity
-├── test-notifications.js           # Test email/Slack alerts
-├── test-duplicate-detection.js     # Test duplicate detection
-├── test-phone-language.js          # Test phone/language field sync
-├── test-daily-summary.js           # Test daily summary email
-├── test-opera-parser.js            # Test OPERA CSV parsing
-├── test-single-record.js           # Test single record upsert
-├── compare-name-matches.js         # Compare Oracle vs Salesforce for duplicates
 └── tvrs-guest-schema.json          # TVRS_Guest__c field schema (discovered via API)
 ```
 
 ## Troubleshooting
 
-**"Cannot connect to Salesforce"** — Refresh token may have expired. Re-run `node get-refresh-token.js` and update `.env`.
+**"Cannot connect to Salesforce"** — Refresh token may have expired. Re-run `node get-refresh-token.js` and update `.env`. To keep the rest of the app running meanwhile, set `ANDON_CORD=true` and restart.
 
-**"Email notifications not working"** — Gmail refresh token may have expired. Re-run `node get-gmail-oauth-token.js` and update `.env`.
+**"Email notifications not working"** — Gmail refresh token may have expired. Re-run `node get-google-oauth-token.js` and update `.env`.
 
-**"No files being processed"** — Verify `EXPORT_DIR` path is correct and files are named `customers*.csv`. Check `logs/opera-sync.log`.
+**"No records syncing"** — Verify the `ORACLE_*` credentials and that the account can read the `OPERA.*` tables. Check `logs/opera-sync.log`.
 
-**Files reprocessing** — The file tracker (`processed-files.json`) prevents this. Delete it to force reprocessing.
+**Records reprocessing / want a re-sync** — Sync progress is tracked in `sync-state.json`. Delete it (or edit the timestamp) to re-pull from an earlier point.

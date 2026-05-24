@@ -1,7 +1,7 @@
 /**
  * Shared guest utilities - agent filtering and Salesforce transformation
  *
- * Used by both opera-parser.js (CSV mode) and opera-db-query.js (DB mode)
+ * Used by opera-db-query.js to transform Oracle rows before Salesforce upsert.
  */
 
 const dns = require('dns');

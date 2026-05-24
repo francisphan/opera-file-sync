@@ -415,10 +415,10 @@ Write-Host "`n$('='*70)" -ForegroundColor $Info
 if ($failedTests -eq 0) {
     Write-Host "✓ ALL TESTS PASSED - Server is ready for deployment!" -ForegroundColor $Success
     Write-Host "`nNext steps:" -ForegroundColor $Info
-    Write-Host "  1. Build the executable: npm run build:exe"
-    Write-Host "  2. Copy dist/opera-sync.exe to this server"
+    Write-Host "  1. Build the executable: npm run build"
+    Write-Host "  2. Copy dist/opera-sync-db.exe to this server"
     Write-Host "  3. Create .env configuration file"
-    Write-Host "  4. Test run: .\opera-sync.exe"
+    Write-Host "  4. Test run: .\opera-sync-db.exe"
 } else {
     Write-Host "✗ SOME TESTS FAILED - Please address the issues above" -ForegroundColor $Error
     Write-Host "`nRequired actions:" -ForegroundColor $Warning

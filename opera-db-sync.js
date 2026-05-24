@@ -83,8 +83,8 @@ async function initialize() {
   // Connect to Salesforce
   sfClient = new SalesforceClient(CONFIG.salesforce);
 
-  // Setup daily summary scheduler (no fileTracker for DB mode)
-  setupDailySummary(notifier, dailyStats, null);
+  // Setup daily summary scheduler
+  setupDailySummary(notifier, dailyStats);
 
   // Setup front desk report scheduler (wired to Oracle for direct queries)
   // Note: oracleClient is connected after this, but the queryFn closure captures the variable

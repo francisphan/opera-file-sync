@@ -82,7 +82,7 @@ Now you will bundle everything into a zip file and put it on
 your Desktop. Copy and paste this entire command, then press
 Enter:
 
-  tar -a -cf "%USERPROFILE%\Desktop\opera-sync-logs.zip" logs\*.log* daily-stats.json sync-state.json processed-files.json 2>nul
+  tar -a -cf "%USERPROFILE%\Desktop\opera-sync-logs.zip" logs\*.log* daily-stats.json sync-state.json 2>nul
 
 NOTE: You might see a message like "The system cannot find the
 file specified" for one or two of the files -- that is okay.
@@ -151,7 +151,6 @@ The zip contains:
 
   daily-stats.json           Today's sync statistics
   sync-state.json            Last sync timestamp and status
-  processed-files.json       List of previously processed files
 
 
 =====================================================
@@ -163,7 +162,7 @@ The zip contains:
   command (it was added in Windows 10 version 1803). Instead,
   use this alternative command:
 
-  powershell -command "Compress-Archive -Path 'logs\*.log*','daily-stats.json','sync-state.json','processed-files.json' -DestinationPath '%USERPROFILE%\Desktop\opera-sync-logs.zip' -Force"
+  powershell -command "Compress-Archive -Path 'logs\*.log*','daily-stats.json','sync-state.json' -DestinationPath '%USERPROFILE%\Desktop\opera-sync-logs.zip' -Force"
 
 "The system cannot find the path specified"
   Make sure you are in the correct app folder (Step 3). Type

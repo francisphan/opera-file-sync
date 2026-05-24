@@ -1,9 +1,9 @@
 ================================================================================
-OPERA File Sync - Deployment Instructions for Windows Server
+OPERA Sync - Deployment Instructions for Windows Server
 ================================================================================
 
 DEPLOYMENT PACKAGE CONTENTS:
-  - opera-sync.exe     (Main executable - no Node.js installation needed!)
+  - opera-sync-db.exe  (Main executable - no Node.js installation needed!)
   - .env.example       (Configuration template)
 
 ================================================================================
@@ -15,8 +15,8 @@ STEP 1: Copy Files to OPERA Server
 
 2. Your directory structure should be:
    D:\opera-sync\
-   ├── opera-sync.exe
-   └── .env
+   |-- opera-sync-db.exe
+   +-- .env
 
 ================================================================================
 STEP 2: Configure .env File
@@ -26,23 +26,25 @@ STEP 2: Configure .env File
 
 2. Verify these settings in .env:
 
-   # Export paths (already configured for server)
-   EXPORT_DIR=D:\MICROS\opera\export\OPERA\vines
-   PROCESSED_DIR=D:\MICROS\opera\export\OPERA\vines\processed
-   FAILED_DIR=D:\MICROS\opera\export\OPERA\vines\failed
-
-   # Salesforce credentials (already configured)
-   SF_INSTANCE_URL=https://thevinesofmendoza2.my.salesforce.com
+   # Salesforce credentials
+   SF_INSTANCE_URL=https://YOUR_INSTANCE.my.salesforce.com
    SF_CLIENT_ID=<your client id>
    SF_CLIENT_SECRET=<your client secret>
    SF_REFRESH_TOKEN=<your refresh token>
 
-   # Email notifications (already configured)
-   SMTP_USER=francis.phan@vinesofmendoza.com
+   # OPERA Oracle database
+   ORACLE_HOST=<oracle host>
+   ORACLE_PORT=1521
+   ORACLE_SID=OPERA
+   ORACLE_USER=<oracle user>
+   ORACLE_PASSWORD=<oracle password>
+
+   # Email notifications
+   SMTP_USER=<your gmail address>
    GMAIL_CLIENT_ID=<your gmail client id>
    GMAIL_CLIENT_SECRET=<your gmail client secret>
    GMAIL_REFRESH_TOKEN=<your gmail refresh token>
-   EMAIL_TO=francis.phan@vinesofmendoza.com,carlos.ferrer@vinesofmendoza.com
+   EMAIL_TO=<recipient1>,<recipient2>
 
 ================================================================================
 STEP 3: Test the Application
@@ -50,14 +52,13 @@ STEP 3: Test the Application
 
 1. Open PowerShell or Command Prompt
 2. Navigate to: cd D:\opera-sync
-3. Run: .\opera-sync.exe
+3. Run: .\opera-sync-db.exe
 
 The application will:
-  - Test Salesforce connection
-  - Test email notifications
-  - Start watching for new customers*.csv files
-  - Automatically process files when they appear
-  - Send email alerts on errors
+  - Test the Salesforce connection
+  - Connect to the OPERA Oracle database
+  - Run an initial catch-up sync, then poll for changes on a schedule
+  - Send email/Slack alerts on errors (after 3 consecutive failures)
 
 Press Ctrl+C to stop.
 
@@ -65,66 +66,53 @@ Press Ctrl+C to stop.
 STEP 4: Set Up as Windows Service (Optional but Recommended)
 ================================================================================
 
-To run automatically in the background:
+To run automatically in the background (see WINDOWS_SERVICE.md for full detail):
 
-1. Download NSSM (Non-Sucking Service Manager):
-   https://nssm.cc/download
-
+1. Download NSSM (Non-Sucking Service Manager): https://nssm.cc/download
 2. Extract nssm.exe to D:\opera-sync\
-
 3. Open PowerShell as Administrator
-
-4. Install service:
-   D:\opera-sync\nssm.exe install OPERASync
-
-5. Configure in the GUI that opens:
-   - Path: D:\opera-sync\opera-sync.exe
-   - Startup directory: D:\opera-sync
-   - Service name: OPERASync
-
-6. Click "Install service"
-
-7. Start the service:
-   nssm start OPERASync
-
-8. Check status:
-   nssm status OPERASync
+4. Install and configure the service:
+   D:\opera-sync\nssm.exe install OPERASync "D:\opera-sync\opera-sync-db.exe"
+   D:\opera-sync\nssm.exe set OPERASync AppDirectory "D:\opera-sync"
+   D:\opera-sync\nssm.exe set OPERASync Start SERVICE_AUTO_START
+5. Start the service:  nssm start OPERASync
+6. Check status:       nssm status OPERASync
 
 ================================================================================
 IMPORTANT NOTES
 ================================================================================
 
-✅ What it does:
-  - Watches D:\MICROS\opera\export\OPERA\vines\ for new customers*.csv files
-  - Automatically finds matching invoices*.csv files
-  - Joins customer + invoice data
-  - Syncs to TVRS_Guest__c in Salesforce
-  - Moves processed files to /processed folder
-  - Moves failed files to /failed folder
-  - Sends email alerts on errors (after 3 consecutive failures)
+What it does:
+  - Polls the OPERA Oracle database for guests with email/reservation changes
+  - Phase 1: looks up the Contact by Email__c and creates it if missing
+  - Phase 2: upserts TVRS_Guest__c (with diffing to skip no-op updates)
+  - Surfaces guests still missing an email in the front desk report
+  - Populates the checkout-survey and check-in Google Sheets
+  - Sends email/Slack alerts on errors (after 3 consecutive failures)
 
-✅ What gets synced:
-  - Email (used as unique identifier)
+What gets synced:
+  - Email (used as the unique identifier / external ID)
   - First Name, Last Name
   - City, State, Country
+  - Phone (Telephone__c) and Language (Language__c) from Oracle
   - Check-in Date, Check-out Date
   - All required boolean fields (set to false)
 
-✅ Logging:
+Logging:
   - Console output shows real-time activity
   - Logs saved to: D:\opera-sync\logs\opera-sync.log
   - Error logs: D:\opera-sync\logs\opera-sync-errors.log
   - Log rotation: 10MB max, 5 files kept
 
-✅ File Processing:
-  - Only processes customers*.csv files (not invoices)
-  - Invoices are automatically joined
-  - Files are tracked to prevent re-processing
-  - Waits 2 seconds after file appears (ensures complete write)
+Andon cord (kill switch):
+  - Set ANDON_CORD=true in .env and restart to pause ALL Salesforce writes
+    without stopping the service. Useful if SF credentials break: Oracle
+    polling, front desk reports, and Sheets sync keep running, and the backlog
+    replays to Salesforce once you unset ANDON_CORD and restart.
 
-⚠️  Security:
-  - Keep .env file secure (contains OAuth tokens)
-  - Set file permissions: Right-click .env → Properties → Security
+Security:
+  - Keep the .env file secure (contains OAuth tokens and DB credentials)
+  - Set file permissions: Right-click .env -> Properties -> Security
   - Only SYSTEM and Administrators should have access
 
 ================================================================================
@@ -132,22 +120,22 @@ TROUBLESHOOTING
 ================================================================================
 
 Problem: "Cannot connect to Salesforce"
-Solution: Check SF_REFRESH_TOKEN hasn't expired. Re-run OAuth flow if needed.
+Solution: Check SF_REFRESH_TOKEN hasn't expired. Re-run the OAuth flow if
+          needed. To keep the rest running meanwhile, set ANDON_CORD=true.
 
 Problem: "Email notifications not working"
-Solution: Check GMAIL_REFRESH_TOKEN. Test with: node test-notifications.js
+Solution: Check GMAIL_REFRESH_TOKEN. Test with: node tests/test-notifications.js
 
-Problem: "No files being processed"
+Problem: "No records syncing"
 Solution:
-  - Check EXPORT_DIR path is correct
-  - Ensure files are named customers*.csv (e.g., customers20260212.csv)
+  - Verify the ORACLE_* credentials and that the account can read OPERA.* tables
   - Check logs in D:\opera-sync\logs\
 
 Problem: Service won't start
 Solution:
   - Check Windows Event Viewer for errors
-  - Verify .env file exists in same directory as .exe
-  - Run manually first to test: .\opera-sync.exe
+  - Verify the .env file exists in the same directory as the .exe
+  - Run manually first to test: .\opera-sync-db.exe
 
 ================================================================================
 SUPPORT
@@ -155,7 +143,6 @@ SUPPORT
 
 For issues or questions:
   - Check logs first: D:\opera-sync\logs\opera-sync.log
-  - Review FAILED_DIR for failed files and error messages
   - Contact: francis.phan@vinesofmendoza.com
 
 ================================================================================

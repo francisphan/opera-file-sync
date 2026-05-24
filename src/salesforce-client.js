@@ -504,7 +504,7 @@ class SalesforceClient {
 
     logger.info(`Sync complete. needsReview: ${results.needsReview.length} items`);
 
-    // Flat aliases for backwards compat with callers (opera-file-sync.js, opera-db-sync.js)
+    // Flat aliases for the poll loop in opera-db-sync.js
     results.success = results.guests.created + results.guests.updated;
     results.failed = results.contacts.failed + results.guests.failed;
 

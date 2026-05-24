@@ -14,7 +14,6 @@ require('dotenv').config();
 const logger = require('../src/logger');
 const Notifier = require('../src/notifier');
 const DailyStats = require('../src/daily-stats');
-const FileTracker = require('../src/file-tracker');
 
 logger.level = 'info';
 
@@ -25,7 +24,6 @@ async function main() {
 
   const notifier = new Notifier();
   const dailyStats = new DailyStats();
-  const fileTracker = new FileTracker();
 
   // Check email configuration
   logger.info('\nEmail Configuration:');
@@ -81,20 +79,6 @@ async function main() {
     logger.info(`    Skipped (agents): ${testStats.skippedAgents}`);
     logger.info(`    Skipped (duplicates): ${testStats.skippedDuplicates}`);
     logger.info(`    Errors: ${testStats.errors}`);
-  }
-
-  // Add file tracker stats (all-time)
-  const fileStats = fileTracker.getStats();
-  if (fileStats.total > 0) {
-    testStats.totalFiles = fileStats.total;
-    testStats.totalSuccess = fileStats.success;
-    testStats.totalFailed = fileStats.failed;
-    logger.info('\nFile Tracker Statistics (All-Time):');
-    logger.info(`  Total files: ${fileStats.total}`);
-    logger.info(`  Successful: ${fileStats.success}`);
-    logger.info(`  Failed: ${fileStats.failed}`);
-  } else {
-    logger.info('\nNo file tracking data (likely running in DB sync mode)');
   }
 
   // Timezone test
@@ -175,9 +159,6 @@ async function main() {
   logger.info('  ✅ Statistics formatting (HTML + text)');
   logger.info('  ✅ Timezone calculation (Argentina Time)');
   logger.info('  ✅ Error detail display');
-  if (testStats.totalFiles) {
-    logger.info('  ✅ All-time file statistics');
-  }
 
   logger.info('\nNext steps:');
   logger.info('  1. Check your email inbox for the daily summary');
