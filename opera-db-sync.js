@@ -90,12 +90,16 @@ async function initialize() {
   // Note: oracleClient is connected after this, but the queryFn closure captures the variable
   // and only executes at scheduled time, by which point oracleClient is connected.
   setupFrontDeskReport(notifier, dailyStats, (dateStr) => queryFrontDeskReport(oracleClient, dateStr));
-  logger.info('Testing Salesforce connection...');
-  const sfConnected = await sfClient.test();
-  if (!sfConnected) {
-    logger.error('Failed to connect to Salesforce.');
-    await notifier.notifySalesforceError(new Error('Failed to connect to Salesforce during startup'));
-    process.exit(1);
+  if (process.env.ANDON_CORD === 'true') {
+    logger.warn('Andon cord pulled — skipping Salesforce connection test. SF writes are paused; Oracle polling, front desk reports and Sheets sync continue.');
+  } else {
+    logger.info('Testing Salesforce connection...');
+    const sfConnected = await sfClient.test();
+    if (!sfConnected) {
+      logger.error('Failed to connect to Salesforce.');
+      await notifier.notifySalesforceError(new Error('Failed to connect to Salesforce during startup'));
+      process.exit(1);
+    }
   }
 
   // Connect to Oracle
@@ -157,9 +161,15 @@ async function poll() {
       dailyStats.addFrontDesk(frontDesk.length, frontDesk);
     }
 
+    // When the andon cord is pulled we keep everything running EXCEPT Salesforce:
+    // the SF write is skipped and the sync watermark is held, so the backlog
+    // replays to SF once the cord is released. Sheets and daily-stats consumers
+    // all dedup, so re-querying the same window every poll is safe.
+    const andonActive = process.env.ANDON_CORD === 'true';
+
     if (records.length === 0 && frontDesk.length === 0) {
       logger.debug('No new records found');
-      syncState.markSuccess(0);
+      if (!andonActive) syncState.markSuccess(0);
       return;
     }
 
@@ -170,33 +180,30 @@ async function poll() {
       const results = await sfClient.syncGuestCheckIns(records);
 
       if (results.andonPulled) {
-        logger.warn('Andon cord active — skipping sync state update, will retry next poll');
-        return;
-      }
-
-      if (results.failed > 0 && results.success === 0) {
+        logger.warn('Andon cord active — Salesforce sync paused; holding watermark for replay. Continuing with Sheets/reports.');
+      } else if (results.failed > 0 && results.success === 0) {
         const err = new Error(`All ${results.failed} records failed: ${results.errors[0]?.error}`);
         syncState.markFailed(err);
         dailyStats.addError(err);
         throw err;
-      }
-
-      logger.info(`✓ Synced ${results.success} records (${results.failed} failed)`);
-      syncState.markSuccess(results.success);
-      dailyStats.addUpload(results.success);
-
-      if (results.needsReview && results.needsReview.length > 0) {
-        dailyStats.addNeedsReview(results.needsReview.length, results.needsReview);
-      }
-
-      await notifier.notifyFileProcessed('db-poll', results.success, frontDesk.length);
-
-      if (notifier.consecutiveErrors > 0) {
-        await notifier.notifyRecovery(results.success);
       } else {
-        notifier.resetErrorCount();
+        logger.info(`✓ Synced ${results.success} records (${results.failed} failed)`);
+        syncState.markSuccess(results.success);
+        dailyStats.addUpload(results.success);
+
+        if (results.needsReview && results.needsReview.length > 0) {
+          dailyStats.addNeedsReview(results.needsReview.length, results.needsReview);
+        }
+
+        await notifier.notifyFileProcessed('db-poll', results.success, frontDesk.length);
+
+        if (notifier.consecutiveErrors > 0) {
+          await notifier.notifyRecovery(results.success);
+        } else {
+          notifier.resetErrorCount();
+        }
       }
-    } else {
+    } else if (!andonActive) {
       syncState.markSuccess(0);
     }
 
