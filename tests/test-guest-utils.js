@@ -19,6 +19,7 @@ const {
   transformToContact,
   transformToTVRSGuest,
   diffGuestRecord,
+  classifyRcptReject,
   AGENT_DOMAIN_KEYWORDS,
   GUEST_DIFF_FIELDS,
   GUEST_DIFF_SOQL_FIELDS,
@@ -905,5 +906,26 @@ describe('module exports', () => {
     assert.equal(typeof GUEST_DIFF_SOQL_FIELDS, 'string');
     assert.ok(GUEST_DIFF_SOQL_FIELDS.includes('Guest_First_Name__c'));
     assert.ok(GUEST_DIFF_SOQL_FIELDS.includes('TVG__c'));
+  });
+});
+
+describe('classifyRcptReject', () => {
+  test('IP/blocklist policy rejections fail open (unknown), not invalid', () => {
+    assert.equal(classifyRcptReject('550 5.7.1 Mail from IP 45.178.245.3 was rejected due to listing in Spamhaus SBL'), 'unknown');
+    assert.equal(classifyRcptReject('554 5.7.1 Service unavailable; Client host blocked using blocklist'), 'unknown');
+    assert.equal(classifyRcptReject('550 5.7.606 Access denied, banned sending IP'), 'unknown');
+    assert.equal(classifyRcptReject('550 5.4.1 Recipient address rejected: Access denied'), 'unknown');
+  });
+
+  test('genuine no-such-mailbox rejections are invalid', () => {
+    assert.equal(classifyRcptReject('550 5.1.1 <bob@x.com>: Recipient address rejected: User unknown'), 'invalid');
+    assert.equal(classifyRcptReject('550 No such user here'), 'invalid');
+    assert.equal(classifyRcptReject('550 Mailbox unavailable'), 'invalid');
+    assert.equal(classifyRcptReject('550 5.2.1 The email account that you tried to reach is disabled'), 'invalid');
+  });
+
+  test('ambiguous 5xx is conservative (unknown)', () => {
+    assert.equal(classifyRcptReject('550 administrative prohibition'), 'unknown');
+    assert.equal(classifyRcptReject(''), 'unknown');
   });
 });
