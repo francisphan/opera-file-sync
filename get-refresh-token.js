@@ -15,6 +15,8 @@
  * No certificate generation required.
  */
 
+require('dotenv').config();
+
 const jsforce = require('jsforce');
 const express = require('express');
 const open = require('open');
