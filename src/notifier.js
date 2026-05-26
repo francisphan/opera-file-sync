@@ -2,6 +2,7 @@ const nodemailer = require('nodemailer');
 const axios = require('axios');
 const logger = require('./logger');
 const { mapLanguageToSalesforce } = require('./guest-utils');
+const { formatVilla } = require('./villa-map');
 
 class Notifier {
   constructor() {
@@ -416,7 +417,7 @@ class Notifier {
     for (const s of sections) {
       if (s.guests.length > 0) {
         textLines.push(`${s.label} (${s.guests.length}):`);
-        s.guests.forEach(g => textLines.push(`  - ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut} | ${g.country} | ${g.language}`));
+        s.guests.forEach(g => textLines.push(`  - ${g.firstName} ${g.lastName} | Villa: ${formatVilla(g.villa) || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut} | ${g.country} | ${g.language}`));
         textLines.push('');
       }
     }
@@ -437,7 +438,7 @@ class Notifier {
     const guestRow = (g) => `
       <tr>
         <td style="${tdStyle}">${nameCell(g)}</td>
-        <td style="${tdNowrap}">${g.villa || '—'}</td>
+        <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
         <td style="${tdNowrap}">${g.prs || '—'}</td>
         <td style="${tdNowrap}">${g.checkIn}</td>
         <td style="${tdNowrap}">${g.checkOut}</td>
@@ -461,7 +462,7 @@ class Notifier {
     const arrivalRow = (g) => `
       <tr>
         <td style="${tdStyle}">${nameCell(g)}</td>
-        <td style="${tdNowrap}">${g.villa || '—'}</td>
+        <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
         <td style="${tdNowrap}">${g.prs || '—'}</td>
         <td style="${tdNowrap}">${g.eta || '—'}</td>
         <td style="${tdNowrap}">${g.checkOut}</td>
@@ -524,7 +525,7 @@ class Notifier {
             return `
           <tr>
             <td style="${tdStyle}">${nameCell(g)}</td>
-            <td style="${tdNowrap}">${g.villa || '—'}</td>
+            <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
             <td style="${tdNowrap}">${g.prs || '—'}</td>
             <td style="${tdStyle};color:#c62828">${reason}</td>
             <td style="${tdNowrap}">${g.checkIn}</td>
@@ -559,7 +560,7 @@ class Notifier {
           ${postingMasters.map(g => `
           <tr>
             <td style="${tdStyle}">${nameCell(g)}</td>
-            <td style="${tdNowrap}">${g.villa || '—'}</td>
+            <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
             <td style="${tdNowrap}">${g.checkIn}</td>
             <td style="${tdNowrap}">${g.checkOut}</td>
             <td style="${tdStyle};font-size:11px">${g.notes || ''}</td>
@@ -584,7 +585,7 @@ class Notifier {
           section,
           `${g.firstName} ${g.lastName}`,
           g.email || '',
-          g.villa || '',
+          formatVilla(g.villa) || '',
           g.prs || '',
           g.eta || '',
           g.checkIn,

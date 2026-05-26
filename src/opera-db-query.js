@@ -383,11 +383,13 @@ async function discoverReservationColumns(oracleClient) {
  * whose first token is a date. Lines without a leading date attach to the
  * preceding chunk (or to a leading "header" chunk if before any dated line).
  * Drop chunks whose date is outside the stay window; keep undated chunks.
+ * When `today` is given, also drop dated chunks whose date has already passed
+ * (before today), even if they fall within the current stay window.
  *
  * Reservation-scoped sources are not passed through this — they apply by
  * definition to the current stay regardless of any dates in their text.
  */
-function filterNoteByStayWindow(labeledNote, checkIn, checkOut) {
+function filterNoteByStayWindow(labeledNote, checkIn, checkOut, today) {
   if (!labeledNote || !checkIn || !checkOut) return labeledNote || null;
 
   const labelMatch = labeledNote.match(/^(\[[^\]]+\]\s*)/);
@@ -416,7 +418,11 @@ function filterNoteByStayWindow(labeledNote, checkIn, checkOut) {
 
   const kept = chunks.filter(c => {
     if (!c.date) return true;
-    return c.date >= checkIn && c.date <= checkOut;
+    if (c.date < checkIn || c.date > checkOut) return false;
+    // Omit entries whose date has already passed (before today), even though
+    // they fall within the current stay window.
+    if (today && c.date < today) return false;
+    return true;
   });
 
   if (kept.length === 0) return null;
@@ -574,6 +580,15 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   const resvIds = [...new Set(rows.map(r => r.RESV_NAME_ID).filter(Boolean))];
   const { notesByNameId, notesByResvId } = await fetchGuestNotes(oracleClient, nameIds, resvIds);
 
+  // Room by reservation — used so companions parked on a parent reservation
+  // (e.g. a group leader / house account sitting on a Posting Master) can
+  // inherit the parent's room when they have none of their own.
+  const roomByResvId = new Map();
+  for (const r of rows) {
+    const rm = (r.ROOM || '').trim() || null;
+    if (rm && !roomByResvId.has(r.RESV_NAME_ID)) roomByResvId.set(r.RESV_NAME_ID, rm);
+  }
+
   // Build guest objects, group shared reservations, then categorize
   const allGuests = [];
   const badEmails = [];
@@ -599,12 +614,18 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       continue;
     }
 
-    const villa = (row.ROOM || '').trim() || null;
+    const ownVilla = (row.ROOM || '').trim() || null;
 
     // Skip Posting Master rooms (e.g. "PM01", "PM02") — not real guest rooms
-    if (villa && EXCLUDED_ROOM_PREFIXES.some(p => villa.toUpperCase().startsWith(p))) {
+    if (ownVilla && EXCLUDED_ROOM_PREFIXES.some(p => ownVilla.toUpperCase().startsWith(p))) {
       continue;
     }
+
+    // A companion whose own reservation has no room inherits its parent's room,
+    // so a party parked on a Posting Master (group leader / house account) lands
+    // in the PM section rather than slipping into In House with a blank villa.
+    const parentVilla = row.PARENT_RESV_NAME_ID ? (roomByResvId.get(row.PARENT_RESV_NAME_ID) || null) : null;
+    const villa = ownVilla || parentVilla;
 
     const checkInDate = row.CHECK_IN || '';
     const checkOutDate = row.CHECK_OUT || '';
@@ -633,7 +654,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
         // that fall outside this stay's window. Reservation-scoped notes are
         // already tied to this stay so we pass them through unfiltered.
         const profileNotes = (notesByNameId.get(row.NAME_ID) || [])
-          .map(n => filterNoteByStayWindow(n, checkInDate, checkOutDate))
+          .map(n => filterNoteByStayWindow(n, checkInDate, checkOutDate, dateStr))
           .filter(Boolean);
         const resvNotes = notesByResvId.get(row.RESV_NAME_ID) || [];
         return [...profileNotes, ...resvNotes].join(' | ') || null;
@@ -772,5 +793,6 @@ module.exports = {
   queryGuestsSince,
   queryFrontDeskReport,
   discoverReservationColumns,
+  filterNoteByStayWindow,
   formatDate
 };

@@ -25,9 +25,10 @@ const OracleClient = require('./src/oracle-client');
 const SyncState = require('./src/sync-state');
 const Notifier = require('./src/notifier');
 const DailyStats = require('./src/daily-stats');
-const { setupDailySummary, setupFrontDeskReport } = require('./src/scheduler');
+const { setupDailySummary, setupFrontDeskReport, setupVillaMapRefresh } = require('./src/scheduler');
 const { queryGuestsSince, queryFrontDeskReport } = require('./src/opera-db-query');
 const SheetsClient = require('./src/sheets-client');
+const villaMap = require('./src/villa-map');
 
 // Configuration
 const CONFIG = {
@@ -82,6 +83,12 @@ async function initialize() {
 
   // Connect to Salesforce
   sfClient = new SalesforceClient(CONFIG.salesforce);
+
+  // Load villa-number map (OPERA # → physical signage #) from local cache + seed,
+  // then refresh from the renumbering sheet once at startup and weekly thereafter.
+  villaMap.load();
+  await villaMap.refresh();
+  setupVillaMapRefresh(villaMap);
 
   // Setup daily summary scheduler
   setupDailySummary(notifier, dailyStats);
