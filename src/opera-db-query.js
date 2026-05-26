@@ -372,12 +372,84 @@ async function discoverReservationColumns(oracleClient) {
   return results;
 }
 
+// Grace buffer (days) applied on each side of the stay window / today before a
+// dated note chunk is dropped — the leading dates are hand-typed and imprecise.
+const NOTE_DATE_BUFFER_DAYS = 7;
+
+// Shift a YYYY-MM-DD date string by `days` (may be negative), returning YYYY-MM-DD.
+function shiftIsoDate(iso, days) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// Three-letter month abbreviations, English + Spanish (the property is in
+// Argentina, so staff mix both). Maps to a 1-based month number.
+const MONTH_ABBR = {
+  JAN: 1, ENE: 1, FEB: 2, MAR: 3, APR: 4, ABR: 4, MAY: 5, JUN: 6, JUL: 7,
+  AUG: 8, AGO: 8, SEP: 9, SET: 9, OCT: 10, NOV: 11, DEC: 12, DIC: 12,
+};
+
+/**
+ * Parse a date written at the very start of a free-text note line and return
+ * it as a `YYYY-MM-DD` string, or null when the line does not begin with a
+ * recognizable date.
+ *
+ * These dates are hand-typed by front-desk staff, so the parsing is permissive
+ * about separators and spacing but still validates the day/month ranges so that
+ * non-date text (room counts, pax, prices) isn't mistaken for a date boundary:
+ *   - Numeric day-first, spaces allowed:  21/04/26, 21-04-2026, 21 / 04 / 26
+ *   - Month-name day-first:               21FEB, 21 FEB 26, 21-FEB-2026
+ *
+ * Argentine/Oracle convention is day-first (DD-MM / DD-MON), so the first field
+ * is always the day. When a month-name entry omits the year (e.g. "21FEB"), the
+ * year defaults to `today`'s year — these are log entries staff expect to read
+ * against the current year. A trailing clock time ("21FEB 09:38") is not
+ * misread as a 2-digit year.
+ */
+function parseLeadingDate(line, today) {
+  const s = String(line).replace(/^\s+/, '');
+  const toIso = (year, mon, day) => {
+    if (mon < 1 || mon > 12 || day < 1 || day > 31) return null;
+    return `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  };
+
+  // Numeric day-first: DD<sep>MM<sep>YY[YY], with optional spaces around seps.
+  let m = s.match(/^(\d{1,2})\s*[-/]\s*(\d{1,2})\s*[-/]\s*(\d{2,4})\b/);
+  if (m) {
+    let year = parseInt(m[3], 10);
+    if (year < 100) year += 2000;
+    return toIso(year, parseInt(m[2], 10), parseInt(m[1], 10));
+  }
+
+  // Month-name day-first: DD MON [YY|YYYY], e.g. "21FEB", "21 FEB 26".
+  m = s.match(/^(\d{1,2})[-.\s]*([A-Za-z]{3})/);
+  if (m) {
+    const mon = MONTH_ABBR[m[2].toUpperCase()];
+    if (!mon) return null; // three letters that aren't a month → not a date
+    const day = parseInt(m[1], 10);
+    // Optional trailing year: separators then 2-4 digits NOT followed by ":"
+    // (which would make it a clock time, not a year).
+    const ym = s.slice(m[0].length).match(/^[-.,\s]*(\d{2,4})(?!\s*:)\b/);
+    let year;
+    if (ym) {
+      year = parseInt(ym[1], 10);
+      if (year < 100) year += 2000;
+    } else {
+      year = today ? parseInt(today.slice(0, 4), 10) : new Date().getFullYear();
+    }
+    return toIso(year, mon, day);
+  }
+
+  return null;
+}
+
 /**
  * Drop dated entries that fall outside the [checkIn, checkOut] window.
  *
  * Profile-level notes (NAME$NOTES / NAME_COMMENT) accumulate over many years of
  * stays and often contain timestamped logs (incidents, welcome-amenity history)
- * tagged with leading dates in Argentine DD-MM-YY or DD/MM/YYYY format.
+ * tagged with leading dates. See parseLeadingDate for the recognized formats.
  *
  * Algorithm: split the note text into chunks where each chunk starts at a line
  * whose first token is a date. Lines without a leading date attach to the
@@ -396,32 +468,34 @@ function filterNoteByStayWindow(labeledNote, checkIn, checkOut, today) {
   const prefix = labelMatch ? labelMatch[0] : '';
   const content = labeledNote.slice(prefix.length);
 
-  const dateRegex = /^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})\b/;
   const lines = content.split('\n');
   const chunks = [];
   let current = { date: null, lines: [] };
 
   for (const line of lines) {
-    const m = line.match(dateRegex);
-    if (m) {
+    const date = parseLeadingDate(line, today);
+    if (date) {
       if (current.lines.length > 0 || current.date) chunks.push(current);
-      const day = String(m[1]).padStart(2, '0');
-      const mon = String(m[2]).padStart(2, '0');
-      let year = parseInt(m[3], 10);
-      if (year < 100) year += 2000;
-      current = { date: `${year}-${mon}-${day}`, lines: [line] };
+      current = { date, lines: [line] };
     } else {
       current.lines.push(line);
     }
   }
   if (current.lines.length > 0 || current.date) chunks.push(current);
 
+  // Because the leading dates are hand-typed (typos, off-by-a-day, loose
+  // notions of which stay a note belongs to), widen every boundary by a
+  // one-week grace buffer before omitting a chunk.
+  const lo = shiftIsoDate(checkIn, -NOTE_DATE_BUFFER_DAYS);
+  const hi = shiftIsoDate(checkOut, NOTE_DATE_BUFFER_DAYS);
+  const cutoff = today ? shiftIsoDate(today, -NOTE_DATE_BUFFER_DAYS) : null;
+
   const kept = chunks.filter(c => {
     if (!c.date) return true;
-    if (c.date < checkIn || c.date > checkOut) return false;
-    // Omit entries whose date has already passed (before today), even though
-    // they fall within the current stay window.
-    if (today && c.date < today) return false;
+    if (c.date < lo || c.date > hi) return false;
+    // Omit entries that passed more than a week ago, even though they fall
+    // within the (buffered) stay window.
+    if (cutoff && c.date < cutoff) return false;
     return true;
   });
 
@@ -794,5 +868,6 @@ module.exports = {
   queryFrontDeskReport,
   discoverReservationColumns,
   filterNoteByStayWindow,
+  parseLeadingDate,
   formatDate
 };
