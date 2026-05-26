@@ -183,8 +183,41 @@ function setupFrontDeskReport(notifier, dailyStats, queryFn) {
   return job;
 }
 
+/**
+ * Setup weekly villa-map refresh from the renumbering Google Sheet.
+ * The map is cached locally; this just keeps the cache fresh in case the
+ * sheet ever changes. Refresh is non-fatal (keeps the cached map on failure).
+ * @param {Object} villaMap - the villa-map module (exposes refresh())
+ * @returns {Object|null} Scheduled job object or null
+ */
+function setupVillaMapRefresh(villaMap) {
+  if (process.env.VILLA_MAP_REFRESH_ENABLED === 'false') {
+    logger.info('Villa map weekly refresh disabled (VILLA_MAP_REFRESH_ENABLED=false)');
+    return null;
+  }
+
+  const timezone = process.env.DAILY_SUMMARY_TIMEZONE || 'America/Argentina/Buenos_Aires';
+  const dayOfWeek = parseInt(process.env.VILLA_MAP_REFRESH_DOW ?? '0', 10); // 0 = Sunday
+  const [hour, minute] = (process.env.VILLA_MAP_REFRESH_TIME || '3:00').split(':').map(Number);
+
+  const rule = new schedule.RecurrenceRule();
+  rule.dayOfWeek = dayOfWeek;
+  rule.hour = hour;
+  rule.minute = minute;
+  rule.tz = timezone;
+
+  const job = schedule.scheduleJob(rule, async () => {
+    logger.info('Running weekly villa-map refresh from sheet');
+    await villaMap.refresh();
+  });
+
+  logger.info(`Villa map refresh scheduled weekly (day ${dayOfWeek}, ${hour}:${String(minute).padStart(2, '0')} ${timezone})`);
+  return job;
+}
+
 module.exports = {
   setupDailySummary,
   setupFrontDeskReport,
+  setupVillaMapRefresh,
   triggerDailySummary
 };

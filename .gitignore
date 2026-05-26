@@ -11,6 +11,9 @@ node_modules/
 # File tracking
 processed-files.json
 
+# Runtime villa-number map cache (regenerated from seed + renumbering sheet)
+villa-map.json
+
 # Test directories
 exports/
 processed/

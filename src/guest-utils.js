@@ -439,9 +439,29 @@ function resolveMx(domain) {
 }
 
 /**
+ * Classify a 5xx RCPT TO rejection: 'invalid' only when the server clearly says
+ * the recipient/mailbox doesn't exist; 'unknown' (fail open) for IP-reputation,
+ * blocklist, greylisting, and other policy rejections — those say nothing about
+ * whether the mailbox exists. Example we must NOT treat as invalid:
+ *   "550 5.7.1 Mail from IP x was rejected due to listing in Spamhaus SBL"
+ * (iCloud/Apple returns this for every address when the sending IP is listed.)
+ */
+function classifyRcptReject(reply) {
+  const r = (reply || '').toLowerCase();
+  // Policy / IP-reputation / blocklist / rate-limit — not a mailbox signal.
+  const policy = /5\.7\.\d|spamhaus|\bsbl\b|block ?list|black ?list|\bblocked\b|reputation|rejected due to|policy|\bspam\b|grey ?list|rate ?limit|try again|temporar|access denied|not authoriz|relay/;
+  if (policy.test(r)) return 'unknown';
+  // Clear "no such recipient" signals.
+  const badMailbox = /5\.1\.[012]|5\.2\.1|no such (?:user|recipient|mailbox)|unknown user|user unknown|user not found|mailbox (?:unavailable|not found|is disabled|does(?:n'?t| not) exist)|(?:email )?account[^.\n]*disabled|recipient (?:rejected|not found|unknown|address rejected)|invalid (?:recipient|mailbox|address)|address (?:unknown|rejected)|does not exist|no mailbox/;
+  if (badMailbox.test(r)) return 'invalid';
+  // Ambiguous 5xx — be conservative; don't falsely flag a guest.
+  return 'unknown';
+}
+
+/**
  * Check a single email via SMTP RCPT TO. Returns 'valid', 'invalid', or 'unknown'.
- * - 'invalid' = server explicitly rejected (550) — mailbox does not exist
- * - 'unknown' = network error, timeout, or ambiguous response (fail open)
+ * - 'invalid' = server clearly rejected the recipient — mailbox does not exist
+ * - 'unknown' = network error, timeout, policy/blocklist 5xx, or ambiguous (fail open)
  * - 'valid' = server accepted the recipient (250)
  */
 function smtpCheck(mxHost, email, timeoutMs = 8000) {
@@ -478,7 +498,7 @@ function smtpCheck(mxHost, email, timeoutMs = 8000) {
         socket.write('QUIT\r\n');
         socket.destroy();
         if (code === 250) resolve('valid');
-        else if (code >= 550 && code <= 559) resolve('invalid');
+        else if (code >= 550 && code <= 559) resolve(classifyRcptReject(buf));
         else resolve('unknown');
       }
     });
@@ -542,4 +562,5 @@ module.exports = {
   GUEST_DIFF_SOQL_FIELDS,
   diffGuestRecord,
   verifyEmailsSMTP,
+  classifyRcptReject,
 };
