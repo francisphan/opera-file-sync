@@ -23,13 +23,13 @@
  */
 
 const fs = require('fs');
-const path = require('path');
 const axios = require('axios');
 const logger = require('./logger');
+const { dataPath } = require('./data-dir');
 
-// Writable cache file, resolved against CWD like sync-state.json / daily-stats.json
-// (next to the .exe when pkg-bundled).
-const CACHE_FILE = path.resolve('villa-map.json');
+// Writable cache file, anchored next to the .exe when pkg-bundled
+// (shared resolution with sync-state.json / daily-stats.json).
+const CACHE_FILE = dataPath('villa-map.json');
 
 // "The Vines Resort & Spa - Cambio de Numeracion" spreadsheet.
 const DEFAULT_SHEET_ID = '188F7zx8YXxBJTmO9Hxx_F_58tfrnY82GtZzvLFLGalE';

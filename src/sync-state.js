@@ -1,8 +1,8 @@
 const fs = require('fs');
-const path = require('path');
 const logger = require('./logger');
+const { dataPath } = require('./data-dir');
 
-const STATE_FILE = path.resolve('sync-state.json');
+const STATE_FILE = dataPath('sync-state.json');
 
 class SyncState {
   constructor() {
