@@ -9,10 +9,11 @@
 const fs = require('fs');
 const path = require('path');
 const logger = require('./logger');
+const { dataPath } = require('./data-dir');
 
 class DailyStats {
   constructor(statsFile = 'daily-stats.json') {
-    this.statsFile = path.resolve(statsFile);
+    this.statsFile = path.isAbsolute(statsFile) ? statsFile : dataPath(statsFile);
     this.currentDate = this.getDateKey();
     this.stats = {
       date: this.currentDate,
