@@ -615,6 +615,168 @@ class Notifier {
   }
 
   /**
+   * Send the bi-weekly villa-nights report: nights per villa split into comp
+   * (rate 0) vs paid, plus a per-rate-code breakdown.
+   * @param {Object} reportData - From queryVillaNightsReport()
+   * @param {string} [toOverride] - Recipient override (defaults to VILLA_REPORT_EMAIL_TO / admin)
+   */
+  async sendVillaNightsReport(reportData, toOverride) {
+    const to = toOverride || process.env.VILLA_REPORT_EMAIL_TO || this.emailTo;
+    if (!this.emailEnabled || !to) {
+      logger.info('Villa nights report: email disabled or no recipient configured — skipping');
+      return false;
+    }
+
+    const { startDate, endDate, villas, rateCodes, totals } = reportData;
+
+    // endDate is exclusive; show the window as start → last counted night.
+    const lastNight = (() => {
+      const d = new Date(`${endDate}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - 1);
+      return d.toISOString().slice(0, 10);
+    })();
+
+    const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : 0);
+
+    const subject = `Villa Nights Report — ${startDate} to ${lastNight}`;
+
+    // ── Plain-text fallback ──
+    const vacantCount = totals.villas - totals.occupiedVillas;
+    const textLines = [
+      `Villa Nights Report`,
+      `Window: ${startDate} through ${lastNight}`,
+      `Villas occupied: ${totals.occupiedVillas}/${totals.villas} (${vacantCount} vacant) | ${totals.nights} villa-nights`,
+      `Comp: ${totals.compNights} (${pct(totals.compNights, totals.nights)}%) | Paid: ${totals.paidNights} (${pct(totals.paidNights, totals.nights)}%)`,
+      ``,
+      `PER VILLA:`,
+      ...villas.map(v => {
+        const codes = v.nights === 0 ? 'vacant' : v.rateCodes.map(rc => `${rc.code}×${rc.nights}`).join(', ');
+        return `  ${formatVilla(v.villa) || v.villa}: ${v.nights} nights (${v.compNights} comp / ${v.paidNights} paid) — ${codes}`;
+      }),
+      ``,
+      `BY RATE CODE:`,
+      ...rateCodes.map(rc => `  ${rc.code}: ${rc.nights} nights (${rc.compNights} comp / ${rc.paidNights} paid)`)
+    ];
+    const textBody = textLines.join('\n');
+
+    // ── HTML ──
+    const tableStyle = 'border-collapse:collapse;width:100%;font-size:16px;margin-bottom:20px';
+    const thStyle = 'padding:9px 13px;border:1px solid #ddd;text-align:left;white-space:nowrap';
+    const tdStyle = 'padding:9px 13px;border:1px solid #ddd';
+    const tdNum = 'padding:9px 13px;border:1px solid #ddd;text-align:right;white-space:nowrap';
+
+    const compChip = (n) => n > 0 ? `<span style="color:#c62828">${n}</span>` : '0';
+
+    let htmlBody = `
+      <div style="font-size:16px;line-height:1.45">
+      <h2 style="margin-bottom:4px;font-size:24px">Villa Nights Report</h2>
+      <p style="color:#666;margin-top:0;font-size:16px"><strong>Window:</strong> ${startDate} through ${lastNight}</p>
+
+      <table style="border-collapse:collapse;margin:12px 0 24px;font-size:16px">
+        <tr style="background:#e8f5e9">
+          <td style="${tdStyle};font-weight:bold">Villas occupied</td>
+          <td style="${tdNum};font-weight:bold;font-size:22px">${totals.occupiedVillas} / ${totals.villas}</td>
+          <td style="${tdStyle};color:#2e7d32;font-weight:bold">${totals.villas - totals.occupiedVillas} vacant this period</td>
+        </tr>
+        <tr>
+          <td style="${tdStyle};font-weight:bold">Villa-nights</td>
+          <td style="${tdNum}">${totals.nights}</td>
+          <td style="${tdStyle};color:#666">total nights sold</td>
+        </tr>
+        <tr>
+          <td style="${tdStyle};font-weight:bold">Paid</td>
+          <td style="${tdNum}">${totals.paidNights}</td>
+          <td style="${tdStyle};color:#666">${pct(totals.paidNights, totals.nights)}%</td>
+        </tr>
+        <tr style="background:#fff3e0">
+          <td style="${tdStyle};font-weight:bold;color:#c62828">Comp</td>
+          <td style="${tdNum};color:#c62828">${totals.compNights}</td>
+          <td style="${tdStyle};color:#666">${pct(totals.compNights, totals.nights)}%</td>
+        </tr>
+      </table>
+
+      <h3 style="margin:20px 0 8px;padding:8px 12px;background:#1565c0;color:#fff;border-radius:4px;font-size:17px">Nights per Villa</h3>
+      <table style="${tableStyle}">
+        <tr style="background:#e3f2fd">
+          <th style="${thStyle}">Villa</th>
+          <th style="${thStyle};text-align:right">Nights</th>
+          <th style="${thStyle};text-align:right">Comp</th>
+          <th style="${thStyle};text-align:right">Paid</th>
+          <th style="${thStyle}">Rate codes</th>
+        </tr>
+        ${villas.map(v => {
+          const vacant = v.nights === 0;
+          const codes = vacant ? '<span style="color:#2e7d32">vacant</span>' : v.rateCodes.map(rc => `${rc.code}&times;${rc.nights}`).join(', ');
+          return `
+        <tr${vacant ? ' style="background:#f1f8e9;color:#9e9e9e"' : ''}>
+          <td style="${tdStyle};white-space:nowrap">${formatVilla(v.villa) || v.villa}</td>
+          <td style="${tdNum}">${v.nights}</td>
+          <td style="${tdNum}">${vacant ? '0' : compChip(v.compNights)}</td>
+          <td style="${tdNum}">${v.paidNights}</td>
+          <td style="${tdStyle};font-size:14px${vacant ? '' : ';color:#555'}">${codes}</td>
+        </tr>`;
+        }).join('')}
+        <tr style="background:#f9f9f9;font-weight:bold">
+          <td style="${tdStyle}">Total (${totals.villas})</td>
+          <td style="${tdNum}">${totals.nights}</td>
+          <td style="${tdNum}">${totals.compNights}</td>
+          <td style="${tdNum}">${totals.paidNights}</td>
+          <td style="${tdStyle}"></td>
+        </tr>
+      </table>
+
+      <h3 style="margin:20px 0 8px;padding:8px 12px;background:#6a1b9a;color:#fff;border-radius:4px;font-size:17px">Nights by Rate Code</h3>
+      <p style="color:#666;font-size:15px;margin:0 0 8px">The rate-plan mix behind the nights above — comp plans (COMP, HOUSE, COMPSTAYSALE&hellip;) vs. owner / friends &amp; family / market rates.</p>
+      <table style="${tableStyle}">
+        <tr style="background:#f3e5f5">
+          <th style="${thStyle}">Rate code</th>
+          <th style="${thStyle};text-align:right">Nights</th>
+          <th style="${thStyle};text-align:right">Comp</th>
+          <th style="${thStyle};text-align:right">Paid</th>
+        </tr>
+        ${rateCodes.map(rc => `
+        <tr>
+          <td style="${tdStyle};white-space:nowrap">${rc.code}</td>
+          <td style="${tdNum}">${rc.nights}</td>
+          <td style="${tdNum}">${compChip(rc.compNights)}</td>
+          <td style="${tdNum}">${rc.paidNights}</td>
+        </tr>`).join('')}
+      </table>
+
+      <p style="color:#999;font-size:13px;margin-top:24px;border-top:1px solid #eee;padding-top:8px">
+        Comp = OPERA per-night RATE_AMOUNT of 0 (free night). Counts are villa-nights — one reservation per villa per night. PM and 9000-series charge accounts are excluded.<br>
+        Generated by OPERA Sync at ${new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })}.
+      </p>
+      </div>`;
+
+    // ── CSV attachment (per-villa) ──
+    const csvEscape = (val) => {
+      const s = String(val == null ? '' : val);
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csvRows = ['Villa,OperaRoom,Nights,CompNights,PaidNights,RateCodes'];
+    for (const v of villas) {
+      csvRows.push([
+        formatVilla(v.villa) || v.villa,
+        v.villa,
+        v.nights,
+        v.compNights,
+        v.paidNights,
+        v.rateCodes.map(rc => `${rc.code} x${rc.nights}`).join('; ')
+      ].map(csvEscape).join(','));
+    }
+    const attachments = [{
+      filename: `villa-nights-${startDate}_to_${lastNight}.csv`,
+      content: csvRows.join('\n'),
+      contentType: 'text/csv'
+    }];
+
+    const sent = await this._sendEmailToRecipients(to, subject, textBody, htmlBody, attachments);
+    logger.info(`Villa nights report sent to ${to}: ${totals.villas} villas, ${totals.nights} nights (${startDate}..${lastNight})`);
+    return sent;
+  }
+
+  /**
    * Build CSV string for needs-review records (ready for SF Data Loader)
    * @param {Array} reviewDetails - Array of needsReview objects
    * @returns {string} CSV content

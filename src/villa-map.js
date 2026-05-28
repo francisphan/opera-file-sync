@@ -97,6 +97,16 @@ function formatVilla(room) {
   return `${entry.phys} → ${room}`;
 }
 
+/**
+ * Sorted list of the current OPERA villa numbers the map knows about (seed +
+ * any cache/sheet entries merged in). This is the canonical "all villas" set —
+ * it excludes residences (100-series), Posting Masters, and legacy/old numbers,
+ * which never enter the map.
+ */
+function knownVillas() {
+  return Object.keys(map).sort();
+}
+
 /** Load the cache file over the seed (called once at startup). */
 function load() {
   try {
@@ -176,4 +186,4 @@ async function refresh(sheetId = process.env.VILLA_MAP_SHEET_ID || DEFAULT_SHEET
   }
 }
 
-module.exports = { formatVilla, load, refresh, normalizeRoom, _SEED: SEED };
+module.exports = { formatVilla, knownVillas, load, refresh, normalizeRoom, _SEED: SEED };

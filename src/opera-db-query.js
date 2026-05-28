@@ -7,6 +7,7 @@
  */
 
 const logger = require('./logger');
+const villaMap = require('./villa-map');
 const { sanitizeEmail, emailInvalidReason, isAgentEmail, isRoleMailbox, mapLanguageToSalesforce, verifyEmailsSMTP } = require('./guest-utils');
 
 const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
@@ -862,10 +863,131 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   return report;
 }
 
+/**
+ * Aggregate villa occupancy for a date window: nights per villa, split into
+ * comp (rate 0) vs paid, plus a per-rate-code breakdown.
+ *
+ * Grain: one row per (ROOM, night). The DB join from RESERVATION_DAILY_ELEMENTS
+ * (room side, carries RATE_AMOUNT) to RESERVATION_DAILY_ELEMENT_NAME (guest side,
+ * carries RATE_CODE) fans out per guest on a shared reservation, so we collapse
+ * back to (ROOM, RESERVATION_DATE) with GROUP BY — a villa hosts one reservation
+ * per night, so this is true occupancy, not guest-nights.
+ *
+ * Comp vs paid is read straight from RATE_AMOUNT (0 = comp). OPERA's dedicated
+ * discount/comp columns are unused at VINES (verified empty across the whole
+ * dataset), and there is no stored rack rate, so "discounted-but-paid" is left to
+ * the rate-code table rather than computed.
+ *
+ * Output is restricted to the mapped villa set (villaMap.knownVillas) — this is
+ * an allowlist, so residences (100-series), Posting Masters, and legacy/old room
+ * numbers are excluded — and every mapped villa gets a row, so a vacant villa
+ * surfaces as 0 nights (the signal that matters for distributing guests).
+ *
+ * @param {OracleClient} oracleClient
+ * @param {string} startDate - inclusive YYYY-MM-DD
+ * @param {string} endDate   - exclusive YYYY-MM-DD
+ * @returns {Promise<Object>} { startDate, endDate, villas, rateCodes, totals }
+ */
+async function queryVillaNightsReport(oracleClient, startDate, endDate) {
+  const rows = await oracleClient.query(`
+    SELECT de.ROOM,
+           TO_CHAR(de.RESERVATION_DATE, 'YYYY-MM-DD') AS NIGHT,
+           MAX(de.RATE_AMOUNT) AS RATE_AMOUNT,
+           MAX(den.RATE_CODE)  AS RATE_CODE
+    FROM OPERA.RESERVATION_DAILY_ELEMENTS de
+    JOIN OPERA.RESERVATION_DAILY_ELEMENT_NAME den
+      ON den.RESORT = de.RESORT
+      AND den.RESERVATION_DATE = de.RESERVATION_DATE
+      AND den.RESV_DAILY_EL_SEQ = de.RESV_DAILY_EL_SEQ
+    JOIN OPERA.RESERVATION_NAME rn
+      ON den.RESV_NAME_ID = rn.RESV_NAME_ID
+    WHERE de.RESORT = 'VINES'
+      AND de.RESERVATION_DATE >= TO_DATE(:startDate, 'YYYY-MM-DD')
+      AND de.RESERVATION_DATE <  TO_DATE(:endDate, 'YYYY-MM-DD')
+      AND rn.RESV_STATUS NOT IN ('CANCELLED', 'NO SHOW')
+      -- A reservation's real nights are [check-in, check-out); this drops the
+      -- spurious checkout-day daily element a departing guest can leave behind,
+      -- so a turnover night attributes to the arriving guest, not the departing.
+      AND de.RESERVATION_DATE >= TRUNC(rn.BEGIN_DATE)
+      AND de.RESERVATION_DATE <  TRUNC(rn.END_DATE)
+    GROUP BY de.ROOM, de.RESERVATION_DATE
+  `, { startDate, endDate });
+
+  // Canonical villa set — only the mapped villas count, and every one gets a row.
+  const known = villaMap.knownVillas();
+  const knownSet = new Set(known);
+
+  const occupied = new Map();    // normalized room -> { nights, compNights, paidNights, rateCodes:Map }
+  const rateCodes = new Map();   // code -> { code, nights, compNights, paidNights }
+  let totalNights = 0, compNights = 0, paidNights = 0;
+
+  for (const row of rows) {
+    const room = (row.ROOM || '').trim();
+    if (!room) continue;
+    const villa = villaMap.normalizeRoom(room);
+    if (!knownSet.has(villa)) continue; // not a current mapped villa (residence / PM / legacy)
+
+    const rate = row.RATE_AMOUNT != null ? Number(row.RATE_AMOUNT) : 0;
+    const code = (row.RATE_CODE || '').trim() || '(none)';
+    const isComp = rate === 0;
+
+    let v = occupied.get(villa);
+    if (!v) {
+      v = { nights: 0, compNights: 0, paidNights: 0, rateCodes: new Map() };
+      occupied.set(villa, v);
+    }
+    v.nights++;
+    if (isComp) v.compNights++; else v.paidNights++;
+    v.rateCodes.set(code, (v.rateCodes.get(code) || 0) + 1);
+
+    let rc = rateCodes.get(code);
+    if (!rc) { rc = { code, nights: 0, compNights: 0, paidNights: 0 }; rateCodes.set(code, rc); }
+    rc.nights++;
+    if (isComp) rc.compNights++; else rc.paidNights++;
+
+    totalNights++;
+    if (isComp) compNights++; else paidNights++;
+  }
+
+  // Sort by OPERA room number ascending — reads cleanly: AC 1–12 first, then
+  // villas in physical order 1–30.
+  const villaNum = (s) => { const n = parseInt(String(s).replace(/\D/g, ''), 10); return Number.isNaN(n) ? Infinity : n; };
+
+  // One row per mapped villa; vacant villas (no occupied nights) show zeros.
+  const villaList = known
+    .slice()
+    .sort((a, b) => villaNum(a) - villaNum(b) || a.localeCompare(b))
+    .map(villa => {
+      const v = occupied.get(villa);
+      return {
+        villa,
+        nights: v ? v.nights : 0,
+        compNights: v ? v.compNights : 0,
+        paidNights: v ? v.paidNights : 0,
+        rateCodes: v
+          ? [...v.rateCodes.entries()].map(([code, nights]) => ({ code, nights })).sort((a, b) => b.nights - a.nights)
+          : []
+      };
+    });
+
+  const rateCodeList = [...rateCodes.values()].sort((a, b) => b.nights - a.nights);
+
+  logger.info(`Villa nights report ${startDate}..${endDate}: ${occupied.size}/${villaList.length} villas occupied, ${totalNights} nights (${compNights} comp, ${paidNights} paid)`);
+
+  return {
+    startDate,
+    endDate,
+    villas: villaList,
+    rateCodes: rateCodeList,
+    totals: { villas: villaList.length, occupiedVillas: occupied.size, nights: totalNights, compNights, paidNights }
+  };
+}
+
 module.exports = {
   queryGuestsByIds,
   queryGuestsSince,
   queryFrontDeskReport,
+  queryVillaNightsReport,
   discoverReservationColumns,
   filterNoteByStayWindow,
   parseLeadingDate,

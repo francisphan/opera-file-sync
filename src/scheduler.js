@@ -215,9 +215,100 @@ function setupVillaMapRefresh(villaMap) {
   return job;
 }
 
+// Today's date (YYYY-MM-DD) in the report timezone.
+function argTodayStr(timezone) {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: timezone })).toISOString().slice(0, 10);
+}
+
+// Shift a YYYY-MM-DD string by `days` (may be negative), returning YYYY-MM-DD.
+function shiftDateStr(iso, days) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+// True on "even" ISO weeks relative to a fixed Monday epoch (2024-01-01), so the
+// every-other-week cadence stays stable across process restarts.
+function isReportWeek() {
+  const epoch = Date.UTC(2024, 0, 1); // a Monday
+  const weeks = Math.floor((Date.now() - epoch) / (7 * 24 * 60 * 60 * 1000));
+  return weeks % 2 === 0;
+}
+
+/**
+ * Setup the bi-weekly villa-nights report. Fires weekly on the configured day,
+ * but only sends every other week (see isReportWeek) so the effective cadence is
+ * 14 days. Each run covers the prior 14 nights.
+ * @param {Notifier} notifier
+ * @param {Function} queryFn - async (startDate, endDate) => reportData
+ * @returns {Object|null} Scheduled job or null
+ */
+function setupVillaNightsReport(notifier, queryFn) {
+  const enabled = process.env.ENABLE_VILLA_REPORT !== 'false';
+  const to = process.env.VILLA_REPORT_EMAIL_TO;
+
+  if (!enabled || !to) {
+    logger.info(to
+      ? 'Villa nights report disabled (ENABLE_VILLA_REPORT=false)'
+      : 'Villa nights report not configured (VILLA_REPORT_EMAIL_TO not set)');
+    return null;
+  }
+
+  const timezone = process.env.DAILY_SUMMARY_TIMEZONE || 'America/Argentina/Buenos_Aires';
+  const dayOfWeek = parseInt(process.env.VILLA_REPORT_DOW ?? '1', 10); // 1 = Monday
+  const [hour, minute] = (process.env.VILLA_REPORT_TIME || '8:00').split(':').map(Number);
+  if (isNaN(hour) || isNaN(minute)) {
+    logger.error(`Invalid VILLA_REPORT_TIME format: ${process.env.VILLA_REPORT_TIME}. Expected "HH:MM"`);
+    return null;
+  }
+
+  const rule = new schedule.RecurrenceRule();
+  rule.dayOfWeek = dayOfWeek;
+  rule.hour = hour;
+  rule.minute = minute;
+  rule.tz = timezone;
+
+  const job = schedule.scheduleJob(rule, async () => {
+    if (!isReportWeek()) {
+      logger.info('Villa nights report: off-week, skipping (bi-weekly cadence)');
+      return;
+    }
+    logger.info('Running scheduled villa nights report');
+    try {
+      const endDate = argTodayStr(timezone);          // exclusive — excludes the in-progress night
+      const startDate = shiftDateStr(endDate, -14);   // prior 14 nights
+      const reportData = await queryFn(startDate, endDate);
+      await notifier.sendVillaNightsReport(reportData);
+    } catch (err) {
+      logger.error('Error sending villa nights report:', err.message);
+      if (err.stack) logger.error(err.stack);
+    }
+  });
+
+  logger.info(`Villa nights report scheduled bi-weekly (day ${dayOfWeek}, ${hour}:${String(minute).padStart(2, '0')} ${timezone}) → ${to}`);
+  return job;
+}
+
+/**
+ * Manually run the villa-nights report (for the standalone script / testing).
+ * @param {Notifier} notifier
+ * @param {Function} queryFn - async (startDate, endDate) => reportData
+ * @param {Object} [opts] - { to, startDate, endDate, days, timezone }
+ */
+async function triggerVillaNightsReport(notifier, queryFn, opts = {}) {
+  const timezone = opts.timezone || process.env.DAILY_SUMMARY_TIMEZONE || 'America/Argentina/Buenos_Aires';
+  const endDate = opts.endDate || argTodayStr(timezone);
+  const startDate = opts.startDate || shiftDateStr(endDate, -(opts.days || 14));
+  logger.info(`Manually running villa nights report ${startDate}..${endDate}`);
+  const reportData = await queryFn(startDate, endDate);
+  return notifier.sendVillaNightsReport(reportData, opts.to);
+}
+
 module.exports = {
   setupDailySummary,
   setupFrontDeskReport,
   setupVillaMapRefresh,
-  triggerDailySummary
+  setupVillaNightsReport,
+  triggerDailySummary,
+  triggerVillaNightsReport
 };

@@ -25,8 +25,8 @@ const OracleClient = require('./src/oracle-client');
 const SyncState = require('./src/sync-state');
 const Notifier = require('./src/notifier');
 const DailyStats = require('./src/daily-stats');
-const { setupDailySummary, setupFrontDeskReport, setupVillaMapRefresh } = require('./src/scheduler');
-const { queryGuestsSince, queryFrontDeskReport } = require('./src/opera-db-query');
+const { setupDailySummary, setupFrontDeskReport, setupVillaMapRefresh, setupVillaNightsReport } = require('./src/scheduler');
+const { queryGuestsSince, queryFrontDeskReport, queryVillaNightsReport } = require('./src/opera-db-query');
 const SheetsClient = require('./src/sheets-client');
 const villaMap = require('./src/villa-map');
 
@@ -97,6 +97,11 @@ async function initialize() {
   // Note: oracleClient is connected after this, but the queryFn closure captures the variable
   // and only executes at scheduled time, by which point oracleClient is connected.
   setupFrontDeskReport(notifier, dailyStats, (dateStr) => queryFrontDeskReport(oracleClient, dateStr));
+
+  // Bi-weekly villa-nights report (nights per villa, comp vs paid). Same closure
+  // pattern as the front desk report — oracleClient is connected before the job fires.
+  setupVillaNightsReport(notifier, (startDate, endDate) => queryVillaNightsReport(oracleClient, startDate, endDate));
+
   if (process.env.ANDON_CORD === 'true') {
     logger.warn('Andon cord pulled — skipping Salesforce connection test. SF writes are paused; Oracle polling, front desk reports and Sheets sync continue.');
   } else {
