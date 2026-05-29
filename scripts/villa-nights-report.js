@@ -10,6 +10,7 @@
  * Usage:
  *   node scripts/villa-nights-report.js                         # prior 14 nights → VILLA_REPORT_EMAIL_TO
  *   node scripts/villa-nights-report.js --to a@b.com            # override recipient
+ *   node scripts/villa-nights-report.js --to a@b.com --cc c@d.com   # add CC (comma-separated for multiple)
  *   node scripts/villa-nights-report.js --days 30               # prior N nights
  *   node scripts/villa-nights-report.js --start 2026-05-01 --end 2026-05-15
  *
@@ -30,6 +31,7 @@ function parseArgs(argv) {
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--to') opts.to = argv[++i];
+    else if (a === '--cc') opts.cc = argv[++i];
     else if (a === '--days') opts.days = parseInt(argv[++i], 10);
     else if (a === '--start') opts.startDate = argv[++i];
     else if (a === '--end') opts.endDate = argv[++i];

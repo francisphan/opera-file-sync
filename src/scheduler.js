@@ -301,7 +301,7 @@ async function triggerVillaNightsReport(notifier, queryFn, opts = {}) {
   const startDate = opts.startDate || shiftDateStr(endDate, -(opts.days || 14));
   logger.info(`Manually running villa nights report ${startDate}..${endDate}`);
   const reportData = await queryFn(startDate, endDate);
-  return notifier.sendVillaNightsReport(reportData, opts.to);
+  return notifier.sendVillaNightsReport(reportData, opts.to, opts.cc);
 }
 
 module.exports = {

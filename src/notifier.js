@@ -137,14 +137,14 @@ class Notifier {
    * @param {string} htmlBody - HTML body
    * @param {Array} attachments - Array of { filename, content, contentType } objects
    */
-  async _sendEmailToRecipients(to, subject, textBody, htmlBody, attachments = []) {
+  async _sendEmailToRecipients(to, subject, textBody, htmlBody, attachments = [], cc = null) {
     if (!this.emailEnabled) {
       return;
     }
 
     try {
       if (this.useGmailAPI) {
-        return await this._sendViaGmailREST(to, subject, textBody, htmlBody, attachments);
+        return await this._sendViaGmailREST(to, subject, textBody, htmlBody, attachments, cc);
       }
 
       const mailOptions = {
@@ -154,6 +154,10 @@ class Notifier {
         text: textBody,
         html: htmlBody
       };
+
+      if (cc) {
+        mailOptions.cc = cc;
+      }
 
       if (attachments.length > 0) {
         mailOptions.attachments = attachments.map(a => ({
@@ -175,7 +179,7 @@ class Notifier {
   /**
    * Send email via Gmail REST API (bypasses SMTP entirely, works in pkg bundles)
    */
-  async _sendViaGmailREST(to, subject, textBody, htmlBody, attachments = []) {
+  async _sendViaGmailREST(to, subject, textBody, htmlBody, attachments = [], cc = null) {
     // Get access token
     const tokenRes = await axios.post('https://oauth2.googleapis.com/token', {
       client_id: this.gmailClientId,
@@ -197,6 +201,7 @@ class Notifier {
       const parts = [
         `From: ${this.emailFrom}`,
         `To: ${to}`,
+        ...(cc ? [`Cc: ${cc}`] : []),
         `Subject: ${encodedSubject}`,
         'MIME-Version: 1.0',
         `Content-Type: multipart/mixed; boundary="${boundary}"`,
@@ -226,6 +231,7 @@ class Notifier {
       message = [
         `From: ${this.emailFrom}`,
         `To: ${to}`,
+        ...(cc ? [`Cc: ${cc}`] : []),
         `Subject: ${encodedSubject}`,
         'MIME-Version: 1.0',
         'Content-Type: text/html; charset=utf-8',
@@ -620,8 +626,9 @@ class Notifier {
    * @param {Object} reportData - From queryVillaNightsReport()
    * @param {string} [toOverride] - Recipient override (defaults to VILLA_REPORT_EMAIL_TO / admin)
    */
-  async sendVillaNightsReport(reportData, toOverride) {
+  async sendVillaNightsReport(reportData, toOverride, ccOverride) {
     const to = toOverride || process.env.VILLA_REPORT_EMAIL_TO || this.emailTo;
+    const cc = ccOverride || process.env.VILLA_REPORT_EMAIL_CC || null;
     if (!this.emailEnabled || !to) {
       logger.info('Villa nights report: email disabled or no recipient configured — skipping');
       return false;
@@ -771,8 +778,8 @@ class Notifier {
       contentType: 'text/csv'
     }];
 
-    const sent = await this._sendEmailToRecipients(to, subject, textBody, htmlBody, attachments);
-    logger.info(`Villa nights report sent to ${to}: ${totals.villas} villas, ${totals.nights} nights (${startDate}..${lastNight})`);
+    const sent = await this._sendEmailToRecipients(to, subject, textBody, htmlBody, attachments, cc);
+    logger.info(`Villa nights report sent to ${to}${cc ? ` (cc ${cc})` : ''}: ${totals.villas} villas, ${totals.nights} nights (${startDate}..${lastNight})`);
     return sent;
   }
 
