@@ -377,6 +377,48 @@ async function discoverReservationColumns(oracleClient) {
 // dated note chunk is dropped — the leading dates are hand-typed and imprecise.
 const NOTE_DATE_BUFFER_DAYS = 7;
 
+// Cap on the merged notes string per guest in the front-desk report. The notes
+// column aggregates several OPERA sources and used to render as a wall of text;
+// front desk asked to trim the bloat. Beyond this many characters we truncate
+// with an ellipsis (on a piece boundary when possible).
+const MAX_NOTES_LEN = 300;
+
+/**
+ * Tidy a merged notes string for the front-desk report: drop empty/duplicate
+ * pieces (the same line often shows up across several OPERA sources) and cap
+ * the total length. Pieces are the ` | `-joined segments produced upstream;
+ * source tags like "[PREF]" are preserved. Dedup is case-insensitive on the
+ * trimmed text (tag included) and keeps first occurrence / original order.
+ */
+function tidyNotes(notes) {
+  if (!notes) return null;
+  const seen = new Set();
+  const pieces = [];
+  for (const raw of notes.split(' | ')) {
+    const piece = raw.trim();
+    if (!piece) continue;
+    const key = piece.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pieces.push(piece);
+  }
+  if (pieces.length === 0) return null;
+
+  // Add pieces until the next one would overflow the cap; truncate cleanly on a
+  // piece boundary. If even the first piece overflows, hard-cut it.
+  let out = '';
+  for (const piece of pieces) {
+    const candidate = out ? `${out} | ${piece}` : piece;
+    if (candidate.length > MAX_NOTES_LEN) {
+      if (!out) out = piece.slice(0, MAX_NOTES_LEN - 1).trimEnd();
+      out += '…';
+      return out;
+    }
+    out = candidate;
+  }
+  return out;
+}
+
 // Shift a YYYY-MM-DD date string by `days` (may be negative), returning YYYY-MM-DD.
 function shiftIsoDate(iso, days) {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -506,16 +548,20 @@ function filterNoteByStayWindow(labeledNote, checkIn, checkOut, today) {
 }
 
 /**
- * Fetch guest notes from all four OPERA sources, grouped by NAME_ID and RESV_NAME_ID.
+ * Fetch guest notes from the OPERA sources the front desk cares about, grouped
+ * by NAME_ID and RESV_NAME_ID.
  *
  * Sources:
- *   1. NAME_COMMENT (COMMENT_TYPE='PROF')         — profile preferences
- *   2. NAME$NOTES (any active NOTE_CODE)          — profile-level free-form notes
+ *   1. NAME$NOTES (any active NOTE_CODE)          — profile-level free-form notes
  *      Common codes: PREF (allergies/preferences), INCONV (incidents), GUESTPROF (bio)
- *   3. RESERVATION_COMMENT (RESERVATION/CASHIER/IN HOUSE) — per-reservation comments
- *   4. RESERVATION_ALERTS                          — per-reservation action alerts
+ *   2. RESERVATION_COMMENT (RESERVATION/IN HOUSE) — per-reservation comments
+ *   3. RESERVATION_ALERTS                          — per-reservation action alerts
  *
- * Each note is labeled with a short tag (e.g. "[PREF]", "[CASHIER]", "[Alert Check-Out]")
+ * NAME_COMMENT (PROF preferences) and CASHIER reservation comments are
+ * deliberately excluded — front desk flagged them as notes-column bloat
+ * (PROF duplicates the PREF notes; CASHIER is billing detail, not actionable).
+ *
+ * Each note is labeled with a short tag (e.g. "[PREF]", "[IN HOUSE]", "[Alert Check-Out]")
  * so the front desk can tell sources apart when they're merged into a single notes string.
  */
 async function fetchGuestNotes(oracleClient, nameIds, resvIds) {
@@ -533,17 +579,6 @@ async function fetchGuestNotes(oracleClient, nameIds, resvIds) {
   if (nameIds.length > 0) {
     const binds = Object.fromEntries(nameIds.map((id, i) => [`n${i}`, id]));
     const holders = nameIds.map((_, i) => `:n${i}`).join(',');
-
-    // NAME_COMMENT — profile preferences (COMMENT_TYPE='PROF', not the dead 'Preferencias' filter)
-    const nc = await oracleClient.query(`
-      SELECT NAME_ID, LINE_NO, COMMENTS
-      FROM OPERA.NAME_COMMENT
-      WHERE NAME_ID IN (${holders})
-        AND COMMENT_TYPE = 'PROF'
-        AND INACTIVE_DATE IS NULL
-      ORDER BY NAME_ID, LINE_NO
-    `, binds);
-    for (const r of nc) push(notesByNameId, r.NAME_ID, 'Prof', r.COMMENTS);
 
     // NAME$NOTES — free-form profile notes (includes PREF allergies, INCONV, GUESTPROF, etc.)
     // NOTES is a CLOB — set fetchAsString globally so we get a JS string back.
@@ -563,13 +598,14 @@ async function fetchGuestNotes(oracleClient, nameIds, resvIds) {
     const binds = Object.fromEntries(resvIds.map((id, i) => [`r${i}`, id]));
     const holders = resvIds.map((_, i) => `:r${i}`).join(',');
 
-    // RESERVATION_COMMENT — broaden to all three VINES types (was only 'RESERVATION')
+    // RESERVATION_COMMENT — guest-facing reservation comments. CASHIER (billing)
+    // is excluded as notes-column bloat per front-desk feedback.
     const rc = await oracleClient.query(`
       SELECT RESV_NAME_ID, COMMENT_TYPE, COMMENTS, INSERT_DATE
       FROM OPERA.RESERVATION_COMMENT
       WHERE RESV_NAME_ID IN (${holders})
         AND RESORT = 'VINES'
-        AND COMMENT_TYPE IN ('RESERVATION', 'CASHIER', 'IN HOUSE')
+        AND COMMENT_TYPE IN ('RESERVATION', 'IN HOUSE')
       ORDER BY RESV_NAME_ID, INSERT_DATE
     `, binds);
     for (const r of rc) push(notesByResvId, r.RESV_NAME_ID, r.COMMENT_TYPE, r.COMMENTS);
@@ -771,6 +807,12 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     } else {
       primaryGuests.push(g);
     }
+  }
+
+  // Dedup repeated note pieces and cap length once the companion preferences
+  // have been merged in (keeps the front-desk notes column from ballooning).
+  for (const g of primaryGuests) {
+    g.notes = tidyNotes(g.notes);
   }
 
   // SMTP/MX verification on the survivors — distinguishes unreachable domains
@@ -991,5 +1033,6 @@ module.exports = {
   discoverReservationColumns,
   filterNoteByStayWindow,
   parseLeadingDate,
+  tidyNotes,
   formatDate
 };

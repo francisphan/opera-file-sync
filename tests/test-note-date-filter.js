@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { parseLeadingDate, filterNoteByStayWindow } = require('../src/opera-db-query');
+const { parseLeadingDate, filterNoteByStayWindow, tidyNotes } = require('../src/opera-db-query');
 
 const TODAY = '2026-05-26';
 
@@ -67,4 +67,31 @@ test('filterNoteByStayWindow — one-week grace buffer around the window', () =>
   assert.ok(out.includes('upcoming this stay'));
   assert.ok(out.includes('just after checkout'));
   assert.ok(!out.includes('long after checkout'));
+});
+
+test('tidyNotes — drops empty input', () => {
+  assert.strictEqual(tidyNotes(null), null);
+  assert.strictEqual(tidyNotes(''), null);
+  assert.strictEqual(tidyNotes('   |   '), null);
+});
+
+test('tidyNotes — dedups repeated pieces case-insensitively, keeps order + tags', () => {
+  const notes = '[PREF] Likes red wine | [IN HOUSE] Late checkout | [PREF] likes red wine';
+  assert.strictEqual(tidyNotes(notes), '[PREF] Likes red wine | [IN HOUSE] Late checkout');
+});
+
+test('tidyNotes — caps total length on a piece boundary with ellipsis', () => {
+  const piece = '[PREF] ' + 'x'.repeat(120);            // 127 chars
+  const out = tidyNotes([piece, piece.replace(/x/g, 'y'), piece.replace(/x/g, 'z')].join(' | '));
+  assert.ok(out.length <= 300);
+  assert.ok(out.endsWith('…'));
+  // Two 127-char pieces + ' | ' = 257 fits; a third would overflow 300.
+  assert.ok(out.includes('xxx') && out.includes('yyy'));
+  assert.ok(!out.includes('zzz'));
+});
+
+test('tidyNotes — hard-cuts a single oversized piece', () => {
+  const out = tidyNotes('[GUESTPROF] ' + 'a'.repeat(500));
+  assert.strictEqual(out.length, 300);
+  assert.ok(out.endsWith('…'));
 });
