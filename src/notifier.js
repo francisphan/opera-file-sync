@@ -415,15 +415,18 @@ class Notifier {
     }
     const sections = [
       { label: 'IN HOUSE', guests: inHouse },
-      { label: 'DEPARTURES', guests: departures },
-      { label: 'ARRIVALS TODAY', guests: arrivalsToday },
-      { label: 'ARRIVALS TOMORROW', guests: arrivalsTomorrow },
+      { label: 'DEPARTURES', guests: departures, time: 'etd' },
+      { label: 'ARRIVALS TODAY', guests: arrivalsToday, time: 'eta' },
+      { label: 'ARRIVALS TOMORROW', guests: arrivalsTomorrow, time: 'eta' },
       { label: 'POSTING MASTERS (charge accounts, not real stays)', guests: postingMasters }
     ];
     for (const s of sections) {
       if (s.guests.length > 0) {
         textLines.push(`${s.label} (${s.guests.length}):`);
-        s.guests.forEach(g => textLines.push(`  - ${g.firstName} ${g.lastName} | Villa: ${formatVilla(g.villa) || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut} | ${g.country} | ${g.language}`));
+        s.guests.forEach(g => {
+          const t = s.time && g[s.time] ? ` | ${s.time === 'eta' ? 'ETA' : 'ETD'}: ~${g[s.time]}` : '';
+          textLines.push(`  - ${g.firstName} ${g.lastName} | Villa: ${formatVilla(g.villa) || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut}${t} | ${g.country} | ${g.language}`);
+        });
         textLines.push('');
       }
     }
@@ -440,6 +443,10 @@ class Notifier {
       if (g.companionNames) name += `<br><span style="font-size:11px;color:#666">+${g.companionNames}</span>`;
       return name;
     };
+
+    // Estimated times are best-effort scrapes from reservation notes (OPERA has
+    // no structured time fields here), so flag them with a "~" to signal that.
+    const estTime = (t) => (t ? `~${t}` : '—');
 
     const guestRow = (g) => `
       <tr>
@@ -470,7 +477,7 @@ class Notifier {
         <td style="${tdStyle}">${nameCell(g)}</td>
         <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
         <td style="${tdNowrap}">${g.prs || '—'}</td>
-        <td style="${tdNowrap}">${g.eta || '—'}</td>
+        <td style="${tdNowrap}">${estTime(g.eta)}</td>
         <td style="${tdNowrap}">${g.checkOut}</td>
         <td style="${tdStyle}">${g.country}</td>
         <td style="${tdStyle}">${g.language}</td>
@@ -489,13 +496,38 @@ class Notifier {
         <th style="${thStyle}">Notes</th>
       </tr>`;
 
+    // Departures show estimated time-out (ETD) in place of the check-in date.
+    const departureRow = (g) => `
+      <tr>
+        <td style="${tdStyle}">${nameCell(g)}</td>
+        <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
+        <td style="${tdNowrap}">${g.prs || '—'}</td>
+        <td style="${tdNowrap}">${estTime(g.etd)}</td>
+        <td style="${tdNowrap}">${g.checkOut}</td>
+        <td style="${tdStyle}">${g.country}</td>
+        <td style="${tdStyle}">${g.language}</td>
+        <td style="${tdStyle};font-size:11px">${g.notes || ''}</td>
+      </tr>`;
+
+    const departureHeaders = `
+      <tr>
+        <th style="${thStyle}">Name</th>
+        <th style="${thStyle}">Villa</th>
+        <th style="${thStyle}">PRS</th>
+        <th style="${thStyle}">ETD</th>
+        <th style="${thStyle}">Check-out</th>
+        <th style="${thStyle}">Country</th>
+        <th style="${thStyle}">Language</th>
+        <th style="${thStyle}">Notes</th>
+      </tr>`;
+
     const prsTotal = (guests) => guests.reduce((sum, g) => sum + (g.adults || 0) + (g.children || 0), 0);
 
-    const buildSection = (title, color, guests, isArrival = false) => {
+    const buildSection = (title, color, guests, variant = 'default') => {
       if (guests.length === 0) return '';
       const total = prsTotal(guests);
-      const hdrs = isArrival ? arrivalHeaders : tableHeaders;
-      const rowFn = isArrival ? arrivalRow : guestRow;
+      const hdrs = variant === 'arrival' ? arrivalHeaders : variant === 'departure' ? departureHeaders : tableHeaders;
+      const rowFn = variant === 'arrival' ? arrivalRow : variant === 'departure' ? departureRow : guestRow;
       return `
         <h3 style="margin:20px 0 8px;padding:8px 12px;background:${color};color:#fff;border-radius:4px;font-size:14px">${title}</h3>
         <table style="${tableStyle}">
@@ -545,9 +577,9 @@ class Notifier {
     }
 
     htmlBody += buildSection('Guests In House', '#1565c0', inHouse);
-    htmlBody += buildSection('Departures', '#757575', departures);
-    htmlBody += buildSection('Arrivals Today', '#2e7d32', arrivalsToday, true);
-    htmlBody += buildSection('Arrivals Tomorrow', '#66bb6a', arrivalsTomorrow, true);
+    htmlBody += buildSection('Departures', '#757575', departures, 'departure');
+    htmlBody += buildSection('Arrivals Today', '#2e7d32', arrivalsToday, 'arrival');
+    htmlBody += buildSection('Arrivals Tomorrow', '#66bb6a', arrivalsTomorrow, 'arrival');
 
     if (postingMasters.length > 0) {
       htmlBody += `
@@ -584,7 +616,7 @@ class Notifier {
       const s = String(v || '');
       return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const csvRows = ['Section,Name,Email,Villa,PRS,ETA,Check-in,Check-out,Country,Language,Reason,Notes'];
+    const csvRows = ['Section,Name,Email,Villa,PRS,ETA,ETD,Check-in,Check-out,Country,Language,Reason,Notes'];
     const addCsvRows = (section, guests) => {
       for (const g of guests) {
         csvRows.push([
@@ -594,6 +626,7 @@ class Notifier {
           formatVilla(g.villa) || '',
           g.prs || '',
           g.eta || '',
+          g.etd || '',
           g.checkIn,
           g.checkOut,
           g.country,

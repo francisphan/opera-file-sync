@@ -106,12 +106,15 @@ async function main() {
       for (const g of s.data) {
         const reason = g.reason ? ` [${g.reason}]` : '';
         const notes = g.notes ? ` | \x1b[33m${g.notes}\x1b[0m` : '';
-        const eta = g.eta ? ` | ETA: ${g.eta}` : '';
+        const eta = g.eta ? ` | ETA: ~${g.eta}` : '';
+        const etd = g.etd ? ` | ETD: ~${g.etd}` : '';
         const companions = g.companionNames ? `\n    \x1b[36m+${g.companionNames}\x1b[0m` : '';
         if (s.label.startsWith('BAD')) {
           console.log(`  ${g.firstName} ${g.lastName} | ${g.email || '(none)'} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut}${reason}${notes}${companions}`);
         } else if (s.label.startsWith('ARRIVAL')) {
           console.log(`  ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'}${eta} | →${g.checkOut} | ${g.country} | ${g.language}${notes}${companions}`);
+        } else if (s.label.startsWith('DEPART')) {
+          console.log(`  ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'}${etd} | ${g.checkIn}→${g.checkOut} | ${g.country} | ${g.language}${notes}${companions}`);
         } else {
           console.log(`  ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut} | ${g.country} | ${g.language}${notes}${companions}`);
         }

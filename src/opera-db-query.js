@@ -419,6 +419,93 @@ function tidyNotes(notes) {
   return out;
 }
 
+// Estimated arrival/departure times at The Vines are never entered into OPERA's
+// structured fields (ARRIVAL_ESTIMATE_TIME et al. are all empty). When known at
+// all, they live as free text inside reservation comments — flight itineraries
+// ("landing ... at 3:15pm"), check-in requests ("check-in ... 13:00 - 14:00"),
+// pickup notes ("pick up para irse ... a las 7am"). The functions below make a
+// best-effort scrape of those, keyword-anchored so we don't grab activity times
+// or prices. Bilingual (es/en/pt) since front-desk staff mix languages.
+//
+// This is deliberately conservative: it returns a time ONLY when one sits next
+// to an arrival/departure keyword. Missing a time is preferred to guessing wrong.
+
+const ARRIVAL_KEYWORDS = /\b(lleg\w*|arrib\w*|aterriz\w*|landing|arrival|arriving|check.?in|eta)\b/gi;
+const DEPARTURE_KEYWORDS = /\b(salid\w*|sa[ií]d\w*|partir\w*|partir[aá]\w*|irse|regreso|check.?out|departure|departing|pick.?up)\b/gi;
+
+// Normalize a parsed clock time to 24h "HH:MM", or null if out of range.
+function normalizeClockTime(hh, mm, ampm) {
+  let h = parseInt(hh, 10);
+  const m = mm == null ? 0 : parseInt(mm, 10);
+  if (Number.isNaN(h) || m > 59) return null;
+  if (ampm) {
+    const ap = ampm.replace(/[^apAP]/g, '').toLowerCase()[0];
+    if (ap === 'p' && h < 12) h += 12;
+    if (ap === 'a' && h === 12) h = 0;
+  }
+  if (h > 23) return null;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// Find every clock-time token in the text, returning {index, end, time}.
+// Recognized: "13:00", "3:15pm", "19.30 hs", "11hs", "7am", "3:00 PM".
+function findTimeTokens(text) {
+  const tokens = [];
+  // Group sets: (1)(2)(3) HH[:.]MM + opt am/pm ; (4)(5) H am/pm ; (6) H hs/hrs
+  const re = /(\d{1,2})\s*[:.]\s*(\d{2})\s*(a\.?\s?m\.?|p\.?\s?m\.?)?|(\d{1,2})\s*(a\.?\s?m\.?|p\.?\s?m\.?)|(\d{1,2})\s*(?:hs|hrs)\b/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    // Price guard: skip a token immediately preceded by a currency marker
+    // ("USD 1.028", "U$ 1.350") — those read as bogus "01:02"/"01:35" times.
+    const before = text.slice(Math.max(0, m.index - 6), m.index);
+    if (/(usd|u\$|ar\$|\$|€)\s*$/i.test(before)) continue;
+    let time = null;
+    if (m[1] != null) time = normalizeClockTime(m[1], m[2], m[3]);
+    else if (m[4] != null) time = normalizeClockTime(m[4], 0, m[5]);
+    else if (m[6] != null) time = normalizeClockTime(m[6], 0, null);
+    if (time) tokens.push({ index: m.index, end: re.lastIndex, time });
+  }
+  return tokens;
+}
+
+/**
+ * Best-effort extraction of an estimated arrival or departure time from free-text
+ * reservation notes. Returns "HH:MM" (24h) or null.
+ *
+ * @param {string} text - raw reservation note text (RESERVATION/IN HOUSE/alerts)
+ * @param {'arrival'|'departure'} kind
+ */
+function extractEstimatedTime(text, kind) {
+  if (!text) return null;
+  const tokens = findTimeTokens(text);
+  if (tokens.length === 0) return null;
+
+  const kw = kind === 'departure' ? DEPARTURE_KEYWORDS : ARRIVAL_KEYWORDS;
+  kw.lastIndex = 0;
+  let best = null;
+  let bestDist = Infinity;
+  let m;
+  while ((m = kw.exec(text)) !== null) {
+    const kwStart = m.index;
+    const kwEnd = kw.lastIndex;
+    for (const t of tokens) {
+      let dist;
+      if (t.index >= kwEnd && t.index - kwEnd <= 60) {
+        dist = t.index - kwEnd;                 // time after keyword (preferred)
+      } else if (kwStart >= t.end && kwStart - t.end <= 12) {
+        dist = (kwStart - t.end) + 100;         // time just before keyword (penalized)
+      } else {
+        continue;
+      }
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = t.time;
+      }
+    }
+  }
+  return best;
+}
+
 // Shift a YYYY-MM-DD date string by `days` (may be negative), returning YYYY-MM-DD.
 function shiftIsoDate(iso, days) {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -745,6 +832,11 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     const adults = row.ADULTS != null ? Number(row.ADULTS) : null;
     const children = row.CHILDREN != null ? Number(row.CHILDREN) : null;
 
+    // OPERA's structured arrival/departure time fields are never filled at The
+    // Vines, so scrape an estimate from the reservation comment free text
+    // (flight itineraries, check-in requests, pickup notes). Best-effort.
+    const resvNoteText = (notesByResvId.get(row.RESV_NAME_ID) || []).join('\n');
+
     const guest = {
       resvNameId,
       parentId,
@@ -759,7 +851,8 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       prs: adults != null ? `${adults}/${children || 0}` : null,
       checkIn: checkInDate,
       checkOut: checkOutDate,
-      eta: (row.ETA || '').trim() || null,
+      eta: (row.ETA || '').trim() || extractEstimatedTime(resvNoteText, 'arrival'),
+      etd: extractEstimatedTime(resvNoteText, 'departure'),
       notes: (() => {
         // Profile-level notes accumulate across stays — strip dated entries
         // that fall outside this stay's window. Reservation-scoped notes are
@@ -1034,5 +1127,6 @@ module.exports = {
   filterNoteByStayWindow,
   parseLeadingDate,
   tidyNotes,
+  extractEstimatedTime,
   formatDate
 };
