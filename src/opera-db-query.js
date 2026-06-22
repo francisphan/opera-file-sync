@@ -9,8 +9,7 @@
 const logger = require('./logger');
 const villaMap = require('./villa-map');
 const { sanitizeEmail, emailInvalidReason, isAgentEmail, isRoleMailbox, mapLanguageToSalesforce, verifyEmailsSMTP } = require('./guest-utils');
-
-const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
+const { expandCountry } = require('./country-names');
 
 // Internal/excluded email domains and addresses — these are skipped during sync
 const EXCLUDED_DOMAINS = (process.env.EXCLUDED_EMAIL_DOMAINS || '')
@@ -373,6 +372,82 @@ async function discoverReservationColumns(oracleClient) {
   return results;
 }
 
+/**
+ * Discover the distinct profile note codes in use (NAME$NOTES.NOTE_CODE) with
+ * counts and a sample, so the property's real codes can be mapped to the
+ * front-desk note categories (FRONT_DESK_NOTE_CODES). Console-logged; non-fatal.
+ */
+async function discoverNoteCodes(oracleClient) {
+  console.log('\n=== Profile note codes (NAME$NOTES) ===');
+  const oracledb = require('oracledb');
+  if (!oracledb.fetchAsString.includes(oracledb.CLOB)) oracledb.fetchAsString.push(oracledb.CLOB);
+  try {
+    const rows = await oracleClient.query(`
+      SELECT NOTE_CODE, COUNT(*) AS CNT, MAX(SUBSTR(NOTES, 1, 60)) AS SAMPLE
+      FROM OPERA."NAME$NOTES"
+      WHERE INACTIVE_DATE IS NULL
+      GROUP BY NOTE_CODE
+      ORDER BY CNT DESC
+    `);
+    for (const r of rows) {
+      console.log(`  ${String(r.NOTE_CODE || '(null)').padEnd(20)} ${String(r.CNT).padStart(7)}   e.g. ${(r.SAMPLE || '').replace(/\s+/g, ' ').trim()}`);
+    }
+    console.log(`\n  ${rows.length} distinct note codes`);
+    return rows;
+  } catch (err) {
+    console.log(`  query failed — ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Discover the shapes behind the data-quality fields (DOB / phone / passport):
+ * NAME columns mentioning birth/passport, the NAME_PHONE roles in use, and any
+ * candidate document tables. Console-logged; non-fatal. Use this to confirm or
+ * correct fetchGuestCompleteness for this property's OPERA config.
+ */
+async function discoverGuestFieldShapes(oracleClient) {
+  const probes = [
+    {
+      title: 'NAME columns mentioning BIRTH / PASSPORT / DOC / ID',
+      sql: `SELECT column_name, data_type FROM all_tab_columns
+            WHERE owner = 'OPERA' AND table_name = 'NAME'
+              AND (column_name LIKE '%BIRTH%' OR column_name LIKE '%PASSPORT%'
+                   OR column_name LIKE '%DOC%' OR column_name LIKE '%ID%')
+            ORDER BY column_name`,
+      fmt: r => `  ${r.COLUMN_NAME} (${r.DATA_TYPE})`,
+    },
+    {
+      title: 'NAME_PHONE roles in use',
+      sql: `SELECT PHONE_ROLE, COUNT(*) AS CNT FROM OPERA.NAME_PHONE
+            GROUP BY PHONE_ROLE ORDER BY CNT DESC`,
+      fmt: r => `  ${String(r.PHONE_ROLE || '(null)').padEnd(16)} ${r.CNT}`,
+    },
+    {
+      title: 'Candidate document tables (OPERA tables with DOC in the name)',
+      sql: `SELECT table_name FROM all_tables
+            WHERE owner = 'OPERA' AND table_name LIKE '%DOC%' ORDER BY table_name`,
+      fmt: r => `  ${r.TABLE_NAME}`,
+    },
+    {
+      title: 'NAME_DOCUMENTS ID_TYPE values (if the table exists)',
+      sql: `SELECT ID_TYPE, COUNT(*) AS CNT FROM OPERA.NAME_DOCUMENTS
+            GROUP BY ID_TYPE ORDER BY CNT DESC`,
+      fmt: r => `  ${String(r.ID_TYPE || '(null)').padEnd(16)} ${r.CNT}`,
+    },
+  ];
+  for (const p of probes) {
+    console.log(`\n=== ${p.title} ===`);
+    try {
+      const rows = await oracleClient.query(p.sql);
+      if (rows.length === 0) console.log('  (no rows)');
+      else rows.forEach(r => console.log(p.fmt(r)));
+    } catch (err) {
+      console.log(`  query failed — ${err.message}`);
+    }
+  }
+}
+
 // Grace buffer (days) applied on each side of the stay window / today before a
 // dated note chunk is dropped — the leading dates are hand-typed and imprecise.
 const NOTE_DATE_BUFFER_DAYS = 7;
@@ -634,26 +709,41 @@ function filterNoteByStayWindow(labeledNote, checkIn, checkOut, today) {
   return filtered ? prefix + filtered : null;
 }
 
+// Profile note codes (NAME$NOTES.NOTE_CODE) surfaced in the front-desk report's
+// Notes column. The desk wants only these three OPERA note categories; every
+// other code is omitted simply by being absent from this list — which keeps out
+// both INCONV (incident logs, "notes-column bloat") and, importantly, CCARDINF
+// ("Credit Card Information", raw card numbers) that must never reach an email.
+// Codes verified against OPERA NOTE$TYPES.DESCRIPTION on 2026-06-22:
+//   HISTORY → "PVO Information"
+//   PALBE   → "Preferencias Alimentos y Bebidas"
+//   PREF    → "Preferencias"
+const FRONT_DESK_NOTE_CODES = ['HISTORY', 'PALBE', 'PREF'];
+
 /**
  * Fetch guest notes from the OPERA sources the front desk cares about, grouped
  * by NAME_ID and RESV_NAME_ID.
  *
  * Sources:
- *   1. NAME$NOTES (any active NOTE_CODE)          — profile-level free-form notes
- *      Common codes: PREF (allergies/preferences), INCONV (incidents), GUESTPROF (bio)
+ *   1. NAME$NOTES (NOTE_CODE in FRONT_DESK_NOTE_CODES) — profile-level notes,
+ *      restricted to the desk's categories: HISTORY (PVO Information), PALBE
+ *      (Preferencias Alimentos y Bebidas), PREF (Preferencias).
  *   2. RESERVATION_COMMENT (RESERVATION/IN HOUSE) — per-reservation comments
  *   3. RESERVATION_ALERTS                          — per-reservation action alerts
+ *   4. RESERVATION_COMMENT (CASHIER)               — billing comments, returned in a
+ *      separate map so callers can surface them only for departures/arrivals.
  *
- * NAME_COMMENT (PROF preferences) and CASHIER reservation comments are
- * deliberately excluded — front desk flagged them as notes-column bloat
- * (PROF duplicates the PREF notes; CASHIER is billing detail, not actionable).
+ * NAME_COMMENT (PROF preferences) is deliberately excluded — it duplicates the
+ * PREF notes. CASHIER comments are returned separately (cashierByResvId) rather
+ * than merged, because they are only actionable at check-in/check-out.
  *
- * Each note is labeled with a short tag (e.g. "[PREF]", "[IN HOUSE]", "[Alert Check-Out]")
+ * Each note is labeled with a short tag (e.g. "[PREF]", "[IN HOUSE]", "[CASHIER]")
  * so the front desk can tell sources apart when they're merged into a single notes string.
  */
 async function fetchGuestNotes(oracleClient, nameIds, resvIds) {
   const notesByNameId = new Map();
   const notesByResvId = new Map();
+  const cashierByResvId = new Map();
   const push = (map, key, label, text) => {
     if (!text) return;
     const trimmed = String(text).trim();
@@ -667,7 +757,12 @@ async function fetchGuestNotes(oracleClient, nameIds, resvIds) {
     const binds = Object.fromEntries(nameIds.map((id, i) => [`n${i}`, id]));
     const holders = nameIds.map((_, i) => `:n${i}`).join(',');
 
-    // NAME$NOTES — free-form profile notes (includes PREF allergies, INCONV, GUESTPROF, etc.)
+    // Keep only the front-desk note categories (FRONT_DESK_NOTE_CODES allow-list).
+    const ph = FRONT_DESK_NOTE_CODES.map((_, i) => `:ac${i}`).join(',');
+    FRONT_DESK_NOTE_CODES.forEach((c, i) => { binds[`ac${i}`] = c; });
+    const codeFilter = ` AND UPPER(NOTE_CODE) IN (${ph})`;
+
+    // NAME$NOTES — free-form profile notes (PREF allergies, GUESTPROF, etc.)
     // NOTES is a CLOB — set fetchAsString globally so we get a JS string back.
     const oracledb = require('oracledb');
     if (!oracledb.fetchAsString.includes(oracledb.CLOB)) oracledb.fetchAsString.push(oracledb.CLOB);
@@ -675,7 +770,7 @@ async function fetchGuestNotes(oracleClient, nameIds, resvIds) {
       SELECT NAME_ID, NOTE_CODE, NOTES
       FROM OPERA."NAME$NOTES"
       WHERE NAME_ID IN (${holders})
-        AND INACTIVE_DATE IS NULL
+        AND INACTIVE_DATE IS NULL${codeFilter}
       ORDER BY NAME_ID, INSERT_DATE
     `, binds);
     for (const r of nn) push(notesByNameId, r.NAME_ID, r.NOTE_CODE || 'Note', r.NOTES);
@@ -685,17 +780,21 @@ async function fetchGuestNotes(oracleClient, nameIds, resvIds) {
     const binds = Object.fromEntries(resvIds.map((id, i) => [`r${i}`, id]));
     const holders = resvIds.map((_, i) => `:r${i}`).join(',');
 
-    // RESERVATION_COMMENT — guest-facing reservation comments. CASHIER (billing)
-    // is excluded as notes-column bloat per front-desk feedback.
+    // RESERVATION_COMMENT — guest-facing reservation comments plus CASHIER
+    // (billing). CASHIER is split into its own map so it can be shown only for
+    // departures/arrivals, where settlement/payment detail is actionable.
     const rc = await oracleClient.query(`
       SELECT RESV_NAME_ID, COMMENT_TYPE, COMMENTS, INSERT_DATE
       FROM OPERA.RESERVATION_COMMENT
       WHERE RESV_NAME_ID IN (${holders})
         AND RESORT = 'VINES'
-        AND COMMENT_TYPE IN ('RESERVATION', 'IN HOUSE')
+        AND COMMENT_TYPE IN ('RESERVATION', 'IN HOUSE', 'CASHIER')
       ORDER BY RESV_NAME_ID, INSERT_DATE
     `, binds);
-    for (const r of rc) push(notesByResvId, r.RESV_NAME_ID, r.COMMENT_TYPE, r.COMMENTS);
+    for (const r of rc) {
+      if (r.COMMENT_TYPE === 'CASHIER') push(cashierByResvId, r.RESV_NAME_ID, 'CASHIER', r.COMMENTS);
+      else push(notesByResvId, r.RESV_NAME_ID, r.COMMENT_TYPE, r.COMMENTS);
+    }
 
     // RESERVATION_ALERTS — front-desk action alerts (Check-In/Check-Out/etc.)
     const ra = await oracleClient.query(`
@@ -708,7 +807,93 @@ async function fetchGuestNotes(oracleClient, nameIds, resvIds) {
     for (const r of ra) push(notesByResvId, r.RESV_NAME_ID, `Alert ${r.AREA || ''}`.trim(), r.DESCRIPTION);
   }
 
-  return { notesByNameId, notesByResvId };
+  return { notesByNameId, notesByResvId, cashierByResvId };
+}
+
+/**
+ * Best-effort completeness lookup for the data-quality report: which guests have
+ * a date of birth, a phone number, and a passport on their OPERA profile.
+ *
+ * Each source is queried independently and fails open — if a table/column name
+ * is wrong for this property's OPERA config the lookup is simply marked
+ * unchecked, so the report never flags a field it could not actually verify
+ * (and the rest of the front-desk report is unaffected). Confirm the real
+ * shapes with `dry-run-front-desk-report --discover`.
+ *
+ * @returns {Promise<{dobByNameId: Map, phoneNameIds: Set, passportNameIds: Set,
+ *                     dobChecked: boolean, phoneChecked: boolean, passportChecked: boolean}>}
+ */
+async function fetchGuestCompleteness(oracleClient, nameIds) {
+  const out = {
+    dobByNameId: new Map(),
+    phoneNameIds: new Set(),
+    passportNameIds: new Set(),
+    dobChecked: false,
+    phoneChecked: false,
+    passportChecked: false,
+  };
+  if (!nameIds.length) return out;
+
+  const binds = Object.fromEntries(nameIds.map((id, i) => [`n${i}`, id]));
+  const holders = nameIds.map((_, i) => `:n${i}`).join(',');
+
+  // Date of birth — standard OPERA NAME.BIRTH_DATE.
+  try {
+    const rows = await oracleClient.query(`
+      SELECT NAME_ID, TO_CHAR(BIRTH_DATE, 'YYYY-MM-DD') AS DOB
+      FROM OPERA.NAME
+      WHERE NAME_ID IN (${holders})
+    `, binds);
+    for (const r of rows) if (r.DOB) out.dobByNameId.set(r.NAME_ID, r.DOB);
+    out.dobChecked = true;
+  } catch (err) {
+    logger.warn(`Completeness: DOB lookup failed, skipping DOB flag — ${err.message}`);
+  }
+
+  // Phone — any NAME_PHONE role other than EMAIL/FAX (email lives in NAME_PHONE
+  // under PHONE_ROLE='EMAIL' at this property, so it must be excluded here).
+  try {
+    const rows = await oracleClient.query(`
+      SELECT DISTINCT NAME_ID
+      FROM OPERA.NAME_PHONE
+      WHERE NAME_ID IN (${holders})
+        AND PHONE_NUMBER IS NOT NULL
+        AND PHONE_ROLE NOT IN ('EMAIL', 'FAX')
+    `, binds);
+    for (const r of rows) out.phoneNameIds.add(r.NAME_ID);
+    out.phoneChecked = true;
+  } catch (err) {
+    logger.warn(`Completeness: phone lookup failed, skipping Phone flag — ${err.message}`);
+  }
+
+  // Passport — best-effort against the standard NAME_DOCUMENTS table. ID_TYPE
+  // coding varies (PASSPORT / P / PASAPORTE), so match permissively.
+  try {
+    const rows = await oracleClient.query(`
+      SELECT DISTINCT NAME_ID
+      FROM OPERA.NAME_DOCUMENTS
+      WHERE NAME_ID IN (${holders})
+        AND ID_NUMBER IS NOT NULL
+        AND (UPPER(ID_TYPE) LIKE 'P%' OR UPPER(ID_TYPE) LIKE '%PASS%' OR UPPER(ID_TYPE) LIKE '%PASA%')
+    `, binds);
+    for (const r of rows) out.passportNameIds.add(r.NAME_ID);
+    out.passportChecked = true;
+  } catch (err) {
+    logger.warn(`Completeness: passport lookup failed, skipping Passport flag — ${err.message}`);
+  }
+
+  return out;
+}
+
+// A DOB is "valid" when it is a real past date with a plausible year. Hand-entry
+// junk (0001, future years) is treated as missing so front desk re-collects it.
+function isValidDob(dob, todayStr) {
+  if (!dob) return false;
+  const m = String(dob).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+  const year = parseInt(m[1], 10);
+  const currentYear = todayStr ? parseInt(todayStr.slice(0, 4), 10) : new Date().getFullYear();
+  return year >= 1900 && year <= currentYear;
 }
 
 /**
@@ -717,19 +902,23 @@ async function fetchGuestNotes(oracleClient, nameIds, resvIds) {
  *
  * @param {OracleClient} oracleClient - Connected Oracle client
  * @param {string} dateStr - Target date as YYYY-MM-DD (default: today Argentina time)
- * @returns {Promise<Object>} Report data with sections: badEmails, inHouse, departures, arrivalsToday, arrivalsTomorrow
+ * @returns {Promise<Object>} Report data with sections: inHouse, departures,
+ *   arrivalsToday, arrivalsTomorrow, arrivalsDayAfter, postingMasters, and a
+ *   separate dataQuality list (email/DOB/phone/passport gaps).
  */
 async function queryFrontDeskReport(oracleClient, dateStr) {
   if (!dateStr) {
     dateStr = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
   }
 
-  // Compute tomorrow as a plain string — no Date objects, no timezone issues
+  // Compute tomorrow / day-after as plain strings — no Date objects, no timezone issues
   const [y, m, d] = dateStr.split('-').map(Number);
-  const tmp = new Date(y, m - 1, d + 1); // local date math
-  const tomorrowStr = `${tmp.getFullYear()}-${String(tmp.getMonth() + 1).padStart(2, '0')}-${String(tmp.getDate()).padStart(2, '0')}`;
+  const tmp1 = new Date(y, m - 1, d + 1); // local date math
+  const tomorrowStr = `${tmp1.getFullYear()}-${String(tmp1.getMonth() + 1).padStart(2, '0')}-${String(tmp1.getDate()).padStart(2, '0')}`;
+  const tmp2 = new Date(y, m - 1, d + 2);
+  const dayAfterStr = `${tmp2.getFullYear()}-${String(tmp2.getMonth() + 1).padStart(2, '0')}-${String(tmp2.getDate()).padStart(2, '0')}`;
 
-  logger.info(`Front desk report: querying guests for ${dateStr} (tomorrow: ${tomorrowStr})`);
+  logger.info(`Front desk report: querying guests for ${dateStr} (tomorrow: ${tomorrowStr}, day-after: ${dayAfterStr})`);
 
   // Oracle returns dates as YYYY-MM-DD strings via TO_CHAR — no JS Date timezone issues
   // Join through RESERVATION_DAILY_ELEMENT_NAME → RESERVATION_DAILY_ELEMENTS to get Room + Adults/Children
@@ -763,20 +952,23 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
         AND rden.RESERVATION_DATE = rde.RESERVATION_DATE
         AND rden.RESV_DAILY_EL_SEQ = rde.RESV_DAILY_EL_SEQ
       WHERE rden.RESORT = 'VINES'
-        AND rden.RESERVATION_DATE BETWEEN TO_DATE(:dateStr, 'YYYY-MM-DD') AND TO_DATE(:tomorrowStr, 'YYYY-MM-DD')
+        AND rden.RESERVATION_DATE BETWEEN TO_DATE(:dateStr, 'YYYY-MM-DD') AND TO_DATE(:dayAfterStr, 'YYYY-MM-DD')
     ) daily ON rn.RESV_NAME_ID = daily.RESV_NAME_ID AND daily.rn = 1
     WHERE rn.RESORT = 'VINES'
       AND rn.RESV_STATUS != 'CANCELLED'
-      AND TRUNC(rn.BEGIN_DATE) <= TO_DATE(:tomorrowStr, 'YYYY-MM-DD')
+      AND TRUNC(rn.BEGIN_DATE) <= TO_DATE(:dayAfterStr, 'YYYY-MM-DD')
       AND TRUNC(rn.END_DATE) >= TO_DATE(:dateStr, 'YYYY-MM-DD')
-  `, { dateStr, tomorrowStr });
+  `, { dateStr, dayAfterStr });
 
   logger.info(`Front desk report: ${rows.length} raw reservation rows returned`);
 
-  // Fetch notes from all four sources, keyed by NAME_ID / RESV_NAME_ID
+  // Fetch notes (and CASHIER comments separately), keyed by NAME_ID / RESV_NAME_ID
   const nameIds = [...new Set(rows.map(r => r.NAME_ID).filter(Boolean))];
   const resvIds = [...new Set(rows.map(r => r.RESV_NAME_ID).filter(Boolean))];
-  const { notesByNameId, notesByResvId } = await fetchGuestNotes(oracleClient, nameIds, resvIds);
+  const { notesByNameId, notesByResvId, cashierByResvId } = await fetchGuestNotes(oracleClient, nameIds, resvIds);
+
+  // Best-effort DOB / phone / passport presence for the data-quality report.
+  const completeness = await fetchGuestCompleteness(oracleClient, nameIds);
 
   // Room by reservation — used so companions parked on a parent reservation
   // (e.g. a group leader / house account sitting on a Posting Master) can
@@ -789,12 +981,13 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
 
   // Build guest objects, group shared reservations, then categorize
   const allGuests = [];
-  const badEmails = [];
   const inHouse = [];
   const departures = [];
   const arrivalsToday = [];
   const arrivalsTomorrow = [];
+  const arrivalsDayAfter = [];
   const postingMasters = [];
+  const dataQuality = [];
 
   for (const row of rows) {
     const rawEmail = (row.EMAIL || '').trim();
@@ -838,12 +1031,13 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     const resvNoteText = (notesByResvId.get(row.RESV_NAME_ID) || []).join('\n');
 
     const guest = {
+      nameId: row.NAME_ID,
       resvNameId,
       parentId,
       firstName,
       lastName,
       email: rawEmail,
-      country: (() => { const code = (row.COUNTRY || '').trim(); try { return code ? countryNames.of(code) || code : ''; } catch { return code; } })(),
+      country: expandCountry(row.COUNTRY),
       language: mapLanguageToSalesforce(row.LANGUAGE),
       villa,
       adults: adults || 0,
@@ -853,16 +1047,18 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       checkOut: checkOutDate,
       eta: (row.ETA || '').trim() || extractEstimatedTime(resvNoteText, 'arrival'),
       etd: extractEstimatedTime(resvNoteText, 'departure'),
-      notes: (() => {
-        // Profile-level notes accumulate across stays — strip dated entries
-        // that fall outside this stay's window. Reservation-scoped notes are
-        // already tied to this stay so we pass them through unfiltered.
+      // Profile-level notes accumulate across stays — strip dated entries that
+      // fall outside this stay's window. Reservation-scoped notes are already
+      // tied to this stay so we pass them through unfiltered. CASHIER comments
+      // are kept apart (cashierRaw) and merged in later only for departures/arrivals.
+      notesRaw: (() => {
         const profileNotes = (notesByNameId.get(row.NAME_ID) || [])
           .map(n => filterNoteByStayWindow(n, checkInDate, checkOutDate, dateStr))
           .filter(Boolean);
         const resvNotes = notesByResvId.get(row.RESV_NAME_ID) || [];
         return [...profileNotes, ...resvNotes].join(' | ') || null;
       })(),
+      cashierRaw: (cashierByResvId.get(row.RESV_NAME_ID) || []).join(' | ') || null,
       companions: []
     };
 
@@ -893,19 +1089,16 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       const parent = byResvNameId.get(g.parentId);
       parent.companions.push(`${g.firstName} ${g.lastName}`);
       // Merge individual preferences from secondary guest into parent notes
-      if (g.notes) {
-        const prefLabel = `${g.firstName}: ${g.notes}`;
-        parent.notes = parent.notes ? `${parent.notes} | ${prefLabel}` : prefLabel;
+      if (g.notesRaw) {
+        const prefLabel = `${g.firstName}: ${g.notesRaw}`;
+        parent.notesRaw = parent.notesRaw ? `${parent.notesRaw} | ${prefLabel}` : prefLabel;
+      }
+      if (g.cashierRaw) {
+        parent.cashierRaw = parent.cashierRaw ? `${parent.cashierRaw} | ${g.cashierRaw}` : g.cashierRaw;
       }
     } else {
       primaryGuests.push(g);
     }
-  }
-
-  // Dedup repeated note pieces and cap length once the companion preferences
-  // have been merged in (keeps the front-desk notes column from ballooning).
-  for (const g of primaryGuests) {
-    g.notes = tidyNotes(g.notes);
   }
 
   // SMTP/MX verification on the survivors — distinguishes unreachable domains
@@ -932,68 +1125,105 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     }
   }
 
-  // Categorize primary guests into sections
+  // Drop the internal-only fields once a guest's notes/completeness are computed.
+  const cleanupGuest = (g) => {
+    delete g.nameId; delete g.resvNameId; delete g.parentId;
+    delete g.companions; delete g.notesRaw; delete g.cashierRaw;
+  };
+
+  // Categorize primary guests into sections (and collect data-quality gaps).
   for (const guest of primaryGuests) {
-    const { checkIn: checkInDate, checkOut: checkOutDate, reason: badReason } = guest;
+    const { checkIn: checkInDate, checkOut: checkOutDate, reason: badReason, nameId } = guest;
 
     const isCheckInToday = checkInDate === dateStr;
     const isCheckInTomorrow = checkInDate === tomorrowStr;
+    const isCheckInDayAfter = checkInDate === dayAfterStr;
     const isCheckOutToday = checkOutDate === dateStr;
     const isInHouse = checkInDate < dateStr && checkOutDate > dateStr;
-    const isOnProperty = checkInDate <= dateStr && checkOutDate >= dateStr;
+    const isArrival = isCheckInToday || isCheckInTomorrow || isCheckInDayAfter;
 
     // Format companion names into display name
     if (guest.companions.length > 0) {
       guest.companionNames = guest.companions.join(', ');
     }
 
-    // Clean up internal fields
-    delete guest.resvNameId;
-    delete guest.parentId;
-    delete guest.companions;
+    // CASHIER (billing) comments are only actionable at the desk for departures
+    // and arrivals — merge them into the notes column only there.
+    const showCashier = isCheckOutToday || isArrival;
+    const combinedNotes = showCashier && guest.cashierRaw
+      ? [guest.notesRaw, guest.cashierRaw].filter(Boolean).join(' | ')
+      : guest.notesRaw;
+    guest.notes = tidyNotes(combinedNotes);
 
     // Posting Masters (9000-series villas) are charge-tracking accounts, not
-    // real stays — surface separately and skip badEmails/regular sections.
+    // real stays — surface separately, skip data-quality / regular sections.
     if (isPostingMasterVilla(guest.villa)) {
-      postingMasters.push({ ...guest });
+      cleanupGuest(guest);
+      postingMasters.push(guest);
       continue;
     }
 
-    if (badReason && isOnProperty) {
-      badEmails.push({ ...guest });
-    }
+    // Data-quality gaps: invalid/missing email plus best-effort DOB/phone/passport.
+    const missing = [];
+    if (badReason) missing.push('Email');
+    if (completeness.dobChecked && !isValidDob(completeness.dobByNameId.get(nameId), dateStr)) missing.push('DOB');
+    if (completeness.phoneChecked && !completeness.phoneNameIds.has(nameId)) missing.push('Phone');
+    if (completeness.passportChecked && !completeness.passportNameIds.has(nameId)) missing.push('Passport');
+    const dob = completeness.dobByNameId.get(nameId) || null;
 
-    if (isCheckOutToday) {
-      departures.push({ ...guest });
-    } else if (isCheckInToday) {
-      arrivalsToday.push({ ...guest });
-    } else if (isCheckInTomorrow) {
-      arrivalsTomorrow.push({ ...guest });
-    } else if (isInHouse) {
-      inHouse.push({ ...guest });
+    cleanupGuest(guest);
+
+    let section = null;
+    if (isCheckOutToday) { section = 'Departures'; departures.push(guest); }
+    else if (isCheckInToday) { section = 'Arrivals Today'; arrivalsToday.push(guest); }
+    else if (isCheckInTomorrow) { section = 'Arrivals Tomorrow'; arrivalsTomorrow.push(guest); }
+    else if (isCheckInDayAfter) { section = 'Arrivals (2 days out)'; arrivalsDayAfter.push(guest); }
+    else if (isInHouse) { section = 'In House'; inHouse.push(guest); }
+
+    if (section && missing.length > 0) {
+      dataQuality.push({
+        firstName: guest.firstName,
+        lastName: guest.lastName,
+        companionNames: guest.companionNames || null,
+        villa: guest.villa,
+        email: guest.email,
+        reason: guest.reason || null,
+        dob,
+        checkIn: checkInDate,
+        checkOut: checkOutDate,
+        section,
+        missing,
+      });
     }
   }
 
-  // Sort each section by last name
-  const byName = (a, b) => (a.lastName + a.firstName).localeCompare(b.lastName + b.firstName);
-  badEmails.sort(byName);
-  inHouse.sort(byName);
-  departures.sort(byName);
-  arrivalsToday.sort(byName);
-  arrivalsTomorrow.sort(byName);
-  postingMasters.sort(byName);
+  // Sort each section by villa number (front-desk ordering); ties break by name.
+  const byVilla = (a, b) => {
+    const ka = villaMap.villaSortKey(a.villa);
+    const kb = villaMap.villaSortKey(b.villa);
+    if (ka !== kb) return ka - kb;
+    return (a.lastName + a.firstName).localeCompare(b.lastName + b.firstName);
+  };
+  inHouse.sort(byVilla);
+  departures.sort(byVilla);
+  arrivalsToday.sort(byVilla);
+  arrivalsTomorrow.sort(byVilla);
+  arrivalsDayAfter.sort(byVilla);
+  postingMasters.sort(byVilla);
+  dataQuality.sort(byVilla);
 
   const report = {
     date: dateStr,
-    badEmails,
     inHouse,
     departures,
     arrivalsToday,
     arrivalsTomorrow,
-    postingMasters
+    arrivalsDayAfter,
+    postingMasters,
+    dataQuality
   };
 
-  logger.info(`Front desk report: ${badEmails.length} bad emails, ${inHouse.length} in-house, ${departures.length} departures, ${arrivalsToday.length} arrivals today, ${arrivalsTomorrow.length} arrivals tomorrow, ${postingMasters.length} posting masters`);
+  logger.info(`Front desk report: ${inHouse.length} in-house, ${departures.length} departures, ${arrivalsToday.length} arrivals today, ${arrivalsTomorrow.length} arrivals tomorrow, ${arrivalsDayAfter.length} arrivals day-after, ${postingMasters.length} posting masters, ${dataQuality.length} data-quality flags`);
 
   return report;
 }
@@ -1124,9 +1354,12 @@ module.exports = {
   queryFrontDeskReport,
   queryVillaNightsReport,
   discoverReservationColumns,
+  discoverNoteCodes,
+  discoverGuestFieldShapes,
   filterNoteByStayWindow,
   parseLeadingDate,
   tidyNotes,
   extractEstimatedTime,
+  isValidDob,
   formatDate
 };

@@ -98,6 +98,22 @@ function formatVilla(room) {
 }
 
 /**
+ * Numeric sort key for ordering report rows "by villa number" the way front
+ * desk reads them. Mapped villas sort by their physical/old number (1-42, which
+ * front desk uses day to day — regular villas land at 1-30, Andes Condor at
+ * 31-42, so the two bands don't collide). Unmapped numeric rooms (e.g. 100-series
+ * residences) sort after all mapped villas; blank/non-numeric rooms sort last.
+ */
+function villaSortKey(room) {
+  if (!room) return Number.POSITIVE_INFINITY;
+  const norm = normalizeRoom(room);
+  const entry = map[norm];
+  if (entry && /^\d+$/.test(String(entry.phys))) return parseInt(entry.phys, 10);
+  if (/^\d+$/.test(norm)) return parseInt(norm, 10) + 100000; // unmapped numeric — after mapped villas
+  return Number.POSITIVE_INFINITY; // non-numeric / unknown — last
+}
+
+/**
  * Sorted list of the current OPERA villa numbers the map knows about (seed +
  * any cache/sheet entries merged in). This is the canonical "all villas" set —
  * it excludes residences (100-series), Posting Masters, and legacy/old numbers,
@@ -186,4 +202,4 @@ async function refresh(sheetId = process.env.VILLA_MAP_SHEET_ID || DEFAULT_SHEET
   }
 }
 
-module.exports = { formatVilla, knownVillas, load, refresh, normalizeRoom, _SEED: SEED };
+module.exports = { formatVilla, villaSortKey, knownVillas, load, refresh, normalizeRoom, _SEED: SEED };
