@@ -47,6 +47,9 @@ class Notifier {
     }
 
     this.frontDeskEmailTo = process.env.FRONT_DESK_EMAIL_TO || null;
+    // Data-quality report (email / DOB / phone / passport gaps) goes to the
+    // front office desk only, separate from the main daily report recipients.
+    this.frontDeskDataEmailTo = process.env.FRONT_DESK_DATA_EMAIL_TO || 'foh@vinesresortandspa.com';
 
     // Slack configuration
     this.slackWebhookUrl = process.env.SLACK_WEBHOOK_URL;
@@ -366,40 +369,44 @@ class Notifier {
   }
 
   /**
+   * Human-readable explanation of why a guest's email needs collection.
+   * Shared by the data-quality report (and the legacy stats fallback).
+   */
+  _describeEmailReason(g) {
+    const r = g.reason;
+    const labels = {
+      'no email':           'No email on file',
+      'no-email':           'No email on file',
+      'booking-proxy':      'Booking.com proxy address',
+      'expedia-proxy':      'Expedia proxy address',
+      'agent-domain':       'Travel agent / company domain',
+      'missing-first-name': 'Name incomplete (TBC or missing)',
+      'role-mailbox':       'Role mailbox (info@, sales@, reservations@, etc.)',
+      'invalid-mailbox':    'Mailbox does not exist (SMTP rejected)',
+      'domain-unreachable': 'Email domain has no mail server',
+      'invalid-email':      'Invalid email format',
+    };
+    if (!r) return '';
+    const noEmail = r === 'no email' || r === 'no-email';
+    if (labels[r]) {
+      return noEmail || !g.email ? labels[r] : `${labels[r]}: ${g.email}`;
+    }
+    // Free-form reasons from emailInvalidReason() — already include the domain
+    // (e.g. "likely typo of gmail.com (gmial.com)") so we don't append the email.
+    return r;
+  }
+
+  /**
    * Send comprehensive daily front desk report with all on-property activity
    * @param {Object} reportData - From queryFrontDeskReport()
    */
   async sendDailyFrontDeskReport(reportData) {
     if (!this.frontDeskEmailTo) return;
 
-    const { date, badEmails, inHouse, departures, arrivalsToday, arrivalsTomorrow, postingMasters = [] } = reportData;
-    const totalGuests = inHouse.length + departures.length + arrivalsToday.length + arrivalsTomorrow.length;
+    const { date, inHouse, departures, arrivalsToday, arrivalsTomorrow, arrivalsDayAfter = [], postingMasters = [] } = reportData;
+    const totalGuests = inHouse.length + departures.length + arrivalsToday.length + arrivalsTomorrow.length + arrivalsDayAfter.length;
 
-    const describeBadEmailReason = (g) => {
-      const r = g.reason;
-      const labels = {
-        'no email':           'No email on file',
-        'no-email':           'No email on file',
-        'booking-proxy':      'Booking.com proxy address',
-        'expedia-proxy':      'Expedia proxy address',
-        'agent-domain':       'Travel agent / company domain',
-        'missing-first-name': 'Name incomplete (TBC or missing)',
-        'role-mailbox':       'Role mailbox (info@, sales@, reservations@, etc.)',
-        'invalid-mailbox':    'Mailbox does not exist (SMTP rejected)',
-        'domain-unreachable': 'Email domain has no mail server',
-        'invalid-email':      'Invalid email format',
-      };
-      if (!r) return '';
-      const noEmail = r === 'no email' || r === 'no-email';
-      if (labels[r]) {
-        return noEmail || !g.email ? labels[r] : `${labels[r]}: ${g.email}`;
-      }
-      // Free-form reasons from emailInvalidReason() — already include the domain
-      // (e.g. "likely typo of gmail.com (gmial.com)") so we don't append the email.
-      return r;
-    };
-
-    if (totalGuests === 0 && badEmails.length === 0 && postingMasters.length === 0) {
+    if (totalGuests === 0 && postingMasters.length === 0) {
       logger.info('Daily front desk report: no guests to report');
       return;
     }
@@ -408,22 +415,21 @@ class Notifier {
 
     // Plain text fallback
     const textLines = [`Daily Front Desk Report — ${date}\n`];
-    if (badEmails.length > 0) {
-      textLines.push(`PRIORITY: ${badEmails.length} guest(s) need email collection`);
-      badEmails.forEach(g => textLines.push(`  - ${g.firstName} ${g.lastName} — ${describeBadEmailReason(g) || g.reason || '(unknown)'}`));
-      textLines.push('');
-    }
     const sections = [
       { label: 'IN HOUSE', guests: inHouse },
-      { label: 'DEPARTURES', guests: departures },
-      { label: 'ARRIVALS TODAY', guests: arrivalsToday },
-      { label: 'ARRIVALS TOMORROW', guests: arrivalsTomorrow },
+      { label: 'DEPARTURES', guests: departures, time: 'etd' },
+      { label: 'ARRIVALS TODAY', guests: arrivalsToday, time: 'eta' },
+      { label: 'ARRIVALS TOMORROW', guests: arrivalsTomorrow, time: 'eta' },
+      { label: 'ARRIVALS (2 DAYS OUT)', guests: arrivalsDayAfter, time: 'eta' },
       { label: 'POSTING MASTERS (charge accounts, not real stays)', guests: postingMasters }
     ];
     for (const s of sections) {
       if (s.guests.length > 0) {
         textLines.push(`${s.label} (${s.guests.length}):`);
-        s.guests.forEach(g => textLines.push(`  - ${g.firstName} ${g.lastName} | Villa: ${formatVilla(g.villa) || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut} | ${g.country} | ${g.language}`));
+        s.guests.forEach(g => {
+          const t = s.time && g[s.time] ? ` | ${s.time === 'eta' ? 'ETA' : 'ETD'}: ~${g[s.time]}` : '';
+          textLines.push(`  - ${g.firstName} ${g.lastName} | Villa: ${formatVilla(g.villa) || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut}${t} | ${g.country} | ${g.language}`);
+        });
         textLines.push('');
       }
     }
@@ -440,6 +446,10 @@ class Notifier {
       if (g.companionNames) name += `<br><span style="font-size:11px;color:#666">+${g.companionNames}</span>`;
       return name;
     };
+
+    // Estimated times are best-effort scrapes from reservation notes (OPERA has
+    // no structured time fields here), so flag them with a "~" to signal that.
+    const estTime = (t) => (t ? `~${t}` : '—');
 
     const guestRow = (g) => `
       <tr>
@@ -470,7 +480,7 @@ class Notifier {
         <td style="${tdStyle}">${nameCell(g)}</td>
         <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
         <td style="${tdNowrap}">${g.prs || '—'}</td>
-        <td style="${tdNowrap}">${g.eta || '—'}</td>
+        <td style="${tdNowrap}">${estTime(g.eta)}</td>
         <td style="${tdNowrap}">${g.checkOut}</td>
         <td style="${tdStyle}">${g.country}</td>
         <td style="${tdStyle}">${g.language}</td>
@@ -489,13 +499,38 @@ class Notifier {
         <th style="${thStyle}">Notes</th>
       </tr>`;
 
+    // Departures show estimated time-out (ETD) in place of the check-in date.
+    const departureRow = (g) => `
+      <tr>
+        <td style="${tdStyle}">${nameCell(g)}</td>
+        <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
+        <td style="${tdNowrap}">${g.prs || '—'}</td>
+        <td style="${tdNowrap}">${estTime(g.etd)}</td>
+        <td style="${tdNowrap}">${g.checkOut}</td>
+        <td style="${tdStyle}">${g.country}</td>
+        <td style="${tdStyle}">${g.language}</td>
+        <td style="${tdStyle};font-size:11px">${g.notes || ''}</td>
+      </tr>`;
+
+    const departureHeaders = `
+      <tr>
+        <th style="${thStyle}">Name</th>
+        <th style="${thStyle}">Villa</th>
+        <th style="${thStyle}">PRS</th>
+        <th style="${thStyle}">ETD</th>
+        <th style="${thStyle}">Check-out</th>
+        <th style="${thStyle}">Country</th>
+        <th style="${thStyle}">Language</th>
+        <th style="${thStyle}">Notes</th>
+      </tr>`;
+
     const prsTotal = (guests) => guests.reduce((sum, g) => sum + (g.adults || 0) + (g.children || 0), 0);
 
-    const buildSection = (title, color, guests, isArrival = false) => {
+    const buildSection = (title, color, guests, variant = 'default') => {
       if (guests.length === 0) return '';
       const total = prsTotal(guests);
-      const hdrs = isArrival ? arrivalHeaders : tableHeaders;
-      const rowFn = isArrival ? arrivalRow : guestRow;
+      const hdrs = variant === 'arrival' ? arrivalHeaders : variant === 'departure' ? departureHeaders : tableHeaders;
+      const rowFn = variant === 'arrival' ? arrivalRow : variant === 'departure' ? departureRow : guestRow;
       return `
         <h3 style="margin:20px 0 8px;padding:8px 12px;background:${color};color:#fff;border-radius:4px;font-size:14px">${title}</h3>
         <table style="${tableStyle}">
@@ -511,43 +546,11 @@ class Notifier {
       <h2 style="margin-bottom:4px">Daily Front Desk Report</h2>
       <p style="color:#666;margin-top:0"><strong>Date:</strong> ${date}</p>`;
 
-    // Priority section: bad emails
-    if (badEmails.length > 0) {
-      htmlBody += `
-        <h3 style="margin:20px 0 8px;padding:8px 12px;background:#e53935;color:#fff;border-radius:4px;font-size:14px">
-          Priority: ${badEmails.length} Guest(s) Need Email Collection
-        </h3>
-        <table style="${tableStyle}">
-          <tr style="background:#ffebee">
-            <th style="${thStyle}">Name</th>
-            <th style="${thStyle}">Villa</th>
-            <th style="${thStyle}">PRS</th>
-            <th style="${thStyle}">Reason</th>
-            <th style="${thStyle}">Check-in</th>
-            <th style="${thStyle}">Check-out</th>
-          </tr>
-          ${badEmails.map(g => {
-            const reason = describeBadEmailReason(g) || g.reason || '(unknown)';
-            return `
-          <tr>
-            <td style="${tdStyle}">${nameCell(g)}</td>
-            <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
-            <td style="${tdNowrap}">${g.prs || '—'}</td>
-            <td style="${tdStyle};color:#c62828">${reason}</td>
-            <td style="${tdNowrap}">${g.checkIn}</td>
-            <td style="${tdNowrap}">${g.checkOut}</td>
-          </tr>`;}).join('')}
-          <tr style="background:#f9f9f9">
-            <td colspan="6" style="${tdStyle};font-weight:bold;font-size:12px">Total: ${badEmails.length} guest(s)</td>
-          </tr>
-        </table>
-        <p style="color:#c62828;font-size:12px;margin-top:4px">Please collect personal email addresses for these guests.</p>`;
-    }
-
     htmlBody += buildSection('Guests In House', '#1565c0', inHouse);
-    htmlBody += buildSection('Departures', '#757575', departures);
-    htmlBody += buildSection('Arrivals Today', '#2e7d32', arrivalsToday, true);
-    htmlBody += buildSection('Arrivals Tomorrow', '#66bb6a', arrivalsTomorrow, true);
+    htmlBody += buildSection('Departures', '#757575', departures, 'departure');
+    htmlBody += buildSection('Arrivals Today', '#2e7d32', arrivalsToday, 'arrival');
+    htmlBody += buildSection('Arrivals Tomorrow', '#66bb6a', arrivalsTomorrow, 'arrival');
+    htmlBody += buildSection('Arrivals (2 Days Out)', '#9ccc65', arrivalsDayAfter, 'arrival');
 
     if (postingMasters.length > 0) {
       htmlBody += `
@@ -584,7 +587,7 @@ class Notifier {
       const s = String(v || '');
       return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const csvRows = ['Section,Name,Email,Villa,PRS,ETA,Check-in,Check-out,Country,Language,Reason,Notes'];
+    const csvRows = ['Section,Name,Email,Villa,PRS,ETA,ETD,Check-in,Check-out,Country,Language,Reason,Notes'];
     const addCsvRows = (section, guests) => {
       for (const g of guests) {
         csvRows.push([
@@ -594,6 +597,7 @@ class Notifier {
           formatVilla(g.villa) || '',
           g.prs || '',
           g.eta || '',
+          g.etd || '',
           g.checkIn,
           g.checkOut,
           g.country,
@@ -603,11 +607,11 @@ class Notifier {
         ].map(csvEscape).join(','));
       }
     };
-    addCsvRows('Bad Email', badEmails);
     addCsvRows('In House', inHouse);
     addCsvRows('Departures', departures);
     addCsvRows('Arrivals Today', arrivalsToday);
     addCsvRows('Arrivals Tomorrow', arrivalsTomorrow);
+    addCsvRows('Arrivals 2 Days Out', arrivalsDayAfter);
     addCsvRows('Posting Master', postingMasters);
 
     const attachments = [{
@@ -617,7 +621,127 @@ class Notifier {
     }];
 
     await this._sendEmailToRecipients(this.frontDeskEmailTo, subject, textBody, htmlBody, attachments);
-    logger.info(`Daily front desk report sent to ${this.frontDeskEmailTo}: ${totalGuests} guests, ${badEmails.length} bad emails`);
+    logger.info(`Daily front desk report sent to ${this.frontDeskEmailTo}: ${totalGuests} guests`);
+  }
+
+  /**
+   * Send the front-office data-quality report: guests on/arriving at the
+   * property whose profile is missing a valid email, DOB, phone, or passport.
+   * Goes only to the front office desk (FRONT_DESK_DATA_EMAIL_TO).
+   * @param {Object} reportData - From queryFrontDeskReport() (uses dataQuality)
+   * @param {string} [toOverride] - Recipient override (e.g. dry-run --to)
+   */
+  async sendDataQualityReport(reportData, toOverride) {
+    const to = toOverride || this.frontDeskDataEmailTo;
+    if (!this.emailEnabled || !to) {
+      logger.info('Data-quality report: email disabled or no recipient configured — skipping');
+      return;
+    }
+
+    const { date, dataQuality = [] } = reportData;
+    if (dataQuality.length === 0) {
+      logger.info('Data-quality report: no guests with missing info — skipping');
+      return;
+    }
+
+    const subject = `Front Desk — ${dataQuality.length} Guest(s) Missing Info (${date})`;
+
+    // Per-guest description of what's missing. Email gets the detailed reason;
+    // DOB/phone/passport are simple presence flags.
+    const missingDetail = (g) => {
+      const parts = [];
+      for (const item of g.missing || []) {
+        if (item === 'Email') parts.push(`Email (${this._describeEmailReason(g) || 'needs collection'})`);
+        else if (item === 'DOB') parts.push('Date of birth');
+        else if (item === 'Phone') parts.push('Phone number');
+        else if (item === 'Passport') parts.push('Passport');
+        else parts.push(item);
+      }
+      return parts;
+    };
+
+    // Plain text fallback
+    const textLines = [
+      `Front Desk — Guests Missing Info — ${date}`,
+      `${dataQuality.length} guest(s) need data collected during their stay.\n`,
+    ];
+    dataQuality.forEach(g => {
+      const name = `${g.firstName} ${g.lastName}${g.companionNames ? ` (+${g.companionNames})` : ''}`;
+      textLines.push(`  - ${name} | Villa ${formatVilla(g.villa) || '—'} | ${g.section} | ${g.checkIn}→${g.checkOut}`);
+      textLines.push(`      Missing: ${missingDetail(g).join('; ')}`);
+    });
+    const textBody = textLines.join('\n');
+
+    // HTML
+    const tableStyle = 'border-collapse:collapse;width:100%;font-size:13px;margin-bottom:20px';
+    const thStyle = 'padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap';
+    const tdStyle = 'padding:6px 10px;border:1px solid #ddd';
+    const tdNowrap = 'padding:6px 10px;border:1px solid #ddd;white-space:nowrap';
+
+    const chip = (label) => `<span style="display:inline-block;background:#ffebee;color:#c62828;border-radius:3px;padding:1px 6px;margin:1px;font-size:11px">${label}</span>`;
+
+    const rows = dataQuality.map(g => {
+      const name = `${g.firstName} ${g.lastName}` + (g.companionNames ? `<br><span style="font-size:11px;color:#666">+${g.companionNames}</span>` : '');
+      const flags = (g.missing || []).map(chip).join(' ');
+      const emailNote = (g.missing || []).includes('Email') ? `<br><span style="font-size:11px;color:#c62828">${this._describeEmailReason(g) || ''}</span>` : '';
+      return `
+        <tr>
+          <td style="${tdStyle}">${name}</td>
+          <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
+          <td style="${tdNowrap}">${g.section}</td>
+          <td style="${tdNowrap}">${g.checkIn}</td>
+          <td style="${tdNowrap}">${g.checkOut}</td>
+          <td style="${tdStyle}">${g.email || '—'}</td>
+          <td style="${tdStyle}">${flags}${emailNote}</td>
+        </tr>`;
+    }).join('');
+
+    const htmlBody = `
+      <h2 style="margin-bottom:4px">Front Desk — Guests Missing Info</h2>
+      <p style="color:#666;margin-top:0"><strong>Date:</strong> ${date} | <strong>Count:</strong> ${dataQuality.length}</p>
+      <table style="${tableStyle}">
+        <tr style="background:#ffebee">
+          <th style="${thStyle}">Name</th>
+          <th style="${thStyle}">Villa</th>
+          <th style="${thStyle}">Section</th>
+          <th style="${thStyle}">Check-in</th>
+          <th style="${thStyle}">Check-out</th>
+          <th style="${thStyle}">Current Email</th>
+          <th style="${thStyle}">Missing</th>
+        </tr>
+        ${rows}
+      </table>
+      <p style="color:#666;font-size:12px">Please collect the flagged details (email, date of birth, phone, passport) during the guest's stay.</p>
+      <p style="color:#999;font-size:11px;margin-top:24px;border-top:1px solid #eee;padding-top:8px">
+        Generated by OPERA Sync at ${new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })}
+      </p>`;
+
+    // CSV attachment
+    const csvEscape = (v) => {
+      const s = String(v || '');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csvRows = ['Name,Villa,Section,Check-in,Check-out,Email,DOB,Missing'];
+    for (const g of dataQuality) {
+      csvRows.push([
+        `${g.firstName} ${g.lastName}`,
+        formatVilla(g.villa) || '',
+        g.section,
+        g.checkIn,
+        g.checkOut,
+        g.email || '',
+        g.dob || '',
+        (g.missing || []).join(' / '),
+      ].map(csvEscape).join(','));
+    }
+    const attachments = [{
+      filename: `front-desk-missing-info-${date}.csv`,
+      content: csvRows.join('\n'),
+      contentType: 'text/csv',
+    }];
+
+    await this._sendEmailToRecipients(to, subject, textBody, htmlBody, attachments);
+    logger.info(`Data-quality report sent to ${to}: ${dataQuality.length} guest(s) missing info`);
   }
 
   /**

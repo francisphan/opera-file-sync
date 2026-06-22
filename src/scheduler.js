@@ -162,6 +162,7 @@ function setupFrontDeskReport(notifier, dailyStats, queryFn) {
         const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
         const reportData = await queryFn(today);
         await notifier.sendDailyFrontDeskReport(reportData);
+        await notifier.sendDataQualityReport(reportData);
         logger.info('Daily front desk report sent (Oracle query)');
       } else {
         // Fallback: use accumulated dailyStats (old behavior)

@@ -17,7 +17,7 @@ require('dotenv').config();
 
 const OracleClient = require('../src/oracle-client');
 const Notifier = require('../src/notifier');
-const { queryFrontDeskReport, discoverReservationColumns } = require('../src/opera-db-query');
+const { queryFrontDeskReport, discoverReservationColumns, discoverNoteCodes, discoverGuestFieldShapes } = require('../src/opera-db-query');
 const logger = require('../src/logger');
 
 // Parse CLI args
@@ -79,6 +79,10 @@ async function main() {
       } else {
         console.log('  No columns returned (check permissions)');
       }
+      // Note codes → map to FRONT_DESK_NOTE_CODES (PVO info / Preferencias / etc.)
+      await discoverNoteCodes(oracleClient);
+      // DOB / phone / passport field shapes for the data-quality report
+      await discoverGuestFieldShapes(oracleClient);
       await oracleClient.close();
       return;
     }
@@ -92,11 +96,11 @@ async function main() {
 
     // Print summary
     const sections = [
-      { label: 'BAD EMAILS (priority)', data: report.badEmails, color: '\x1b[31m' },
       { label: 'IN HOUSE', data: report.inHouse, color: '\x1b[34m' },
       { label: 'DEPARTURES', data: report.departures, color: '\x1b[90m' },
       { label: 'ARRIVALS TODAY', data: report.arrivalsToday, color: '\x1b[32m' },
-      { label: 'ARRIVALS TOMORROW', data: report.arrivalsTomorrow, color: '\x1b[92m' }
+      { label: 'ARRIVALS TOMORROW', data: report.arrivalsTomorrow, color: '\x1b[92m' },
+      { label: 'ARRIVALS (2 DAYS OUT)', data: report.arrivalsDayAfter, color: '\x1b[92m' }
     ];
 
     for (const s of sections) {
@@ -106,12 +110,15 @@ async function main() {
       for (const g of s.data) {
         const reason = g.reason ? ` [${g.reason}]` : '';
         const notes = g.notes ? ` | \x1b[33m${g.notes}\x1b[0m` : '';
-        const eta = g.eta ? ` | ETA: ${g.eta}` : '';
+        const eta = g.eta ? ` | ETA: ~${g.eta}` : '';
+        const etd = g.etd ? ` | ETD: ~${g.etd}` : '';
         const companions = g.companionNames ? `\n    \x1b[36m+${g.companionNames}\x1b[0m` : '';
         if (s.label.startsWith('BAD')) {
           console.log(`  ${g.firstName} ${g.lastName} | ${g.email || '(none)'} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut}${reason}${notes}${companions}`);
         } else if (s.label.startsWith('ARRIVAL')) {
           console.log(`  ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'}${eta} | →${g.checkOut} | ${g.country} | ${g.language}${notes}${companions}`);
+        } else if (s.label.startsWith('DEPART')) {
+          console.log(`  ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'}${etd} | ${g.checkIn}→${g.checkOut} | ${g.country} | ${g.language}${notes}${companions}`);
         } else {
           console.log(`  ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | PRS: ${g.prs || '—'} | ${g.checkIn}→${g.checkOut} | ${g.country} | ${g.language}${notes}${companions}`);
         }
@@ -120,8 +127,17 @@ async function main() {
     }
 
     const prsSum = (arr) => arr.reduce((sum, g) => sum + (g.adults || 0) + (g.children || 0), 0);
-    const total = prsSum(report.inHouse) + prsSum(report.departures) + prsSum(report.arrivalsToday) + prsSum(report.arrivalsTomorrow);
-    console.log(`Total: ${total} guests, ${report.badEmails.length} need email collection\n`);
+    const total = prsSum(report.inHouse) + prsSum(report.departures) + prsSum(report.arrivalsToday) + prsSum(report.arrivalsTomorrow) + prsSum(report.arrivalsDayAfter);
+    console.log(`Total: ${total} guests, ${(report.dataQuality || []).length} missing info (email/DOB/phone/passport)\n`);
+
+    // Data-quality detail
+    if ((report.dataQuality || []).length > 0) {
+      console.log('\x1b[31m--- MISSING INFO ---\x1b[0m');
+      for (const g of report.dataQuality) {
+        console.log(`  ${g.firstName} ${g.lastName} | Villa: ${g.villa || '—'} | ${g.section} | Missing: ${g.missing.join(', ')}`);
+      }
+      console.log('');
+    }
 
     // Send email
     if (!flags.noEmail) {
@@ -139,6 +155,10 @@ async function main() {
       const notifier = new Notifier();
       console.log(`Sending email to ${process.env.FRONT_DESK_EMAIL_TO}...`);
       await notifier.sendDailyFrontDeskReport(report);
+      // Data-quality report normally goes to FRONT_DESK_DATA_EMAIL_TO (foh@).
+      // For dry-runs, route it to --to (or FRONT_DESK_EMAIL_TO) so we never email
+      // the real front office by accident.
+      await notifier.sendDataQualityReport(report, flags.to || process.env.FRONT_DESK_EMAIL_TO);
       console.log('Email sent!');
     }
 

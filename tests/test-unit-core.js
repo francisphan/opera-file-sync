@@ -402,3 +402,90 @@ describe('Notifier', () => {
     assert.equal(n.consecutiveErrors, 0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Country name expansion
+// ---------------------------------------------------------------------------
+
+describe('expandCountry', () => {
+  const { expandCountry } = require('../src/country-names');
+
+  test('expands ISO alpha-3 codes (OPERA default) to full names', () => {
+    assert.equal(expandCountry('USA'), 'United States');
+    assert.equal(expandCountry('ARG'), 'Argentina');
+    assert.equal(expandCountry('GBR'), 'United Kingdom');
+    assert.equal(expandCountry('BRA'), 'Brazil');
+  });
+
+  test('expands ISO alpha-2 codes too', () => {
+    assert.equal(expandCountry('US'), 'United States');
+    assert.equal(expandCountry('AR'), 'Argentina');
+  });
+
+  test('is case-insensitive and trims whitespace', () => {
+    assert.equal(expandCountry('  usa '), 'United States');
+    assert.equal(expandCountry('arg'), 'Argentina');
+  });
+
+  test('returns blank for empty / nullish input', () => {
+    assert.equal(expandCountry(''), '');
+    assert.equal(expandCountry(null), '');
+    assert.equal(expandCountry(undefined), '');
+  });
+
+  test('returns the raw value unchanged when it cannot be resolved', () => {
+    assert.equal(expandCountry('ZZZ'), 'ZZZ');
+    assert.equal(expandCountry('Mendoza'), 'Mendoza');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Villa sort key (front-desk ordering)
+// ---------------------------------------------------------------------------
+
+describe('villaSortKey', () => {
+  const { villaSortKey } = require('../src/villa-map');
+
+  test('orders mapped villas by physical number', () => {
+    // OPERA 014 → physical 1, OPERA 035 → physical 30
+    assert.ok(villaSortKey('014') < villaSortKey('035'));
+  });
+
+  test('regular villas (phys 1-30) sort before Andes Condor (phys 31-42)', () => {
+    // OPERA 025 → phys 17 (regular), OPERA 001 → phys 42 (AC)
+    assert.ok(villaSortKey('025') < villaSortKey('001'));
+  });
+
+  test('unmapped numeric rooms (residences) sort after mapped villas', () => {
+    assert.ok(villaSortKey('100') > villaSortKey('014'));
+    assert.ok(villaSortKey('100') > villaSortKey('001'));
+  });
+
+  test('blank / missing villa sorts last', () => {
+    assert.equal(villaSortKey(''), Number.POSITIVE_INFINITY);
+    assert.equal(villaSortKey(null), Number.POSITIVE_INFINITY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DOB validity (data-quality report)
+// ---------------------------------------------------------------------------
+
+describe('isValidDob', () => {
+  const { isValidDob } = require('../src/opera-db-query');
+
+  test('accepts a plausible past date', () => {
+    assert.equal(isValidDob('1985-03-20', '2026-06-22'), true);
+  });
+
+  test('rejects missing / malformed values', () => {
+    assert.equal(isValidDob(null, '2026-06-22'), false);
+    assert.equal(isValidDob('', '2026-06-22'), false);
+    assert.equal(isValidDob('not-a-date', '2026-06-22'), false);
+  });
+
+  test('rejects junk years (hand-entry 0001) and future years', () => {
+    assert.equal(isValidDob('0001-01-01', '2026-06-22'), false);
+    assert.equal(isValidDob('2099-01-01', '2026-06-22'), false);
+  });
+});
