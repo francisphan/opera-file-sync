@@ -9,6 +9,7 @@
  * Options:
  *   --date YYYY-MM-DD    Simulate report for a specific date (default: today Argentina time)
  *   --to email@addr      Send email to this address instead of FRONT_DESK_EMAIL_TO
+ *   --cc email@addr      CC this address on the data-quality report
  *   --no-email           Print to console only, don't send email
  *   --discover           Run schema discovery and print RESERVATION_NAME columns
  */
@@ -25,6 +26,7 @@ const args = process.argv.slice(2);
 const flags = {
   date: null,
   to: null,
+  cc: null,
   noEmail: false,
   discover: false
 };
@@ -34,13 +36,15 @@ for (let i = 0; i < args.length; i++) {
     flags.date = args[++i];
   } else if (args[i] === '--to' && args[i + 1]) {
     flags.to = args[++i];
+  } else if (args[i] === '--cc' && args[i + 1]) {
+    flags.cc = args[++i];
   } else if (args[i] === '--no-email') {
     flags.noEmail = true;
   } else if (args[i] === '--discover') {
     flags.discover = true;
   } else {
     console.error(`Unknown option: ${args[i]}`);
-    console.error('Usage: node scripts/dry-run-front-desk-report.js [--date YYYY-MM-DD] [--to email] [--no-email] [--discover]');
+    console.error('Usage: node scripts/dry-run-front-desk-report.js [--date YYYY-MM-DD] [--to email] [--cc email] [--no-email] [--discover]');
     process.exit(1);
   }
 }
@@ -158,7 +162,7 @@ async function main() {
       // Data-quality report normally goes to FRONT_DESK_DATA_EMAIL_TO (foh@).
       // For dry-runs, route it to --to (or FRONT_DESK_EMAIL_TO) so we never email
       // the real front office by accident.
-      await notifier.sendDataQualityReport(report, flags.to || process.env.FRONT_DESK_EMAIL_TO);
+      await notifier.sendDataQualityReport(report, flags.to || process.env.FRONT_DESK_EMAIL_TO, flags.cc);
       console.log('Email sent!');
     }
 

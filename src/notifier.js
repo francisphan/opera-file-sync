@@ -627,12 +627,15 @@ class Notifier {
   /**
    * Send the front-office data-quality report: guests on/arriving at the
    * property whose profile is missing a valid email, DOB, phone, or passport.
-   * Goes only to the front office desk (FRONT_DESK_DATA_EMAIL_TO).
+   * Goes to the front office desk (FRONT_DESK_DATA_EMAIL_TO), optionally
+   * copying FRONT_DESK_DATA_EMAIL_CC (comma-separated for multiple).
    * @param {Object} reportData - From queryFrontDeskReport() (uses dataQuality)
    * @param {string} [toOverride] - Recipient override (e.g. dry-run --to)
+   * @param {string} [ccOverride] - CC override (e.g. dry-run --cc)
    */
-  async sendDataQualityReport(reportData, toOverride) {
+  async sendDataQualityReport(reportData, toOverride, ccOverride) {
     const to = toOverride || this.frontDeskDataEmailTo;
+    const cc = ccOverride || process.env.FRONT_DESK_DATA_EMAIL_CC || null;
     if (!this.emailEnabled || !to) {
       logger.info('Data-quality report: email disabled or no recipient configured — skipping');
       return;
@@ -740,8 +743,8 @@ class Notifier {
       contentType: 'text/csv',
     }];
 
-    await this._sendEmailToRecipients(to, subject, textBody, htmlBody, attachments);
-    logger.info(`Data-quality report sent to ${to}: ${dataQuality.length} guest(s) missing info`);
+    await this._sendEmailToRecipients(to, subject, textBody, htmlBody, attachments, cc);
+    logger.info(`Data-quality report sent to ${to}${cc ? ` (cc ${cc})` : ''}: ${dataQuality.length} guest(s) missing info`);
   }
 
   /**

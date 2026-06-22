@@ -814,18 +814,27 @@ async function fetchGuestNotes(oracleClient, nameIds, resvIds) {
  * Best-effort completeness lookup for the data-quality report: which guests have
  * a date of birth, a phone number, and a passport on their OPERA profile.
  *
+ * OPERA stores DOB and document numbers ENCRYPTED, so we can only verify that a
+ * value is present, not read it. Two property-specific facts (verified against
+ * the live DB 2026-06-22) drive the queries below:
+ *   - DOB lives in NAME.BIRTH_DATE_STR (encrypted); the plain NAME.BIRTH_DATE
+ *     column is never populated here. Presence of BIRTH_DATE_STR = DOB on file.
+ *   - Passport type codes were renumbered in Oct 2024 (old 'PAS' retired to
+ *     "NO USAR", new '94' = "Pasaporte"), so passport types are resolved from
+ *     DOCUMENT_TYPES by role/description rather than a fixed ID_TYPE pattern.
+ *
  * Each source is queried independently and fails open — if a table/column name
  * is wrong for this property's OPERA config the lookup is simply marked
  * unchecked, so the report never flags a field it could not actually verify
  * (and the rest of the front-desk report is unaffected). Confirm the real
  * shapes with `dry-run-front-desk-report --discover`.
  *
- * @returns {Promise<{dobByNameId: Map, phoneNameIds: Set, passportNameIds: Set,
+ * @returns {Promise<{dobNameIds: Set, phoneNameIds: Set, passportNameIds: Set,
  *                     dobChecked: boolean, phoneChecked: boolean, passportChecked: boolean}>}
  */
 async function fetchGuestCompleteness(oracleClient, nameIds) {
   const out = {
-    dobByNameId: new Map(),
+    dobNameIds: new Set(),
     phoneNameIds: new Set(),
     passportNameIds: new Set(),
     dobChecked: false,
@@ -837,14 +846,18 @@ async function fetchGuestCompleteness(oracleClient, nameIds) {
   const binds = Object.fromEntries(nameIds.map((id, i) => [`n${i}`, id]));
   const holders = nameIds.map((_, i) => `:n${i}`).join(',');
 
-  // Date of birth — standard OPERA NAME.BIRTH_DATE.
+  // Date of birth — OPERA encrypts it into NAME.BIRTH_DATE_STR and leaves the
+  // structured NAME.BIRTH_DATE empty (verified: 0 of ~50k D-profiles populate
+  // BIRTH_DATE). We can't decrypt it, but a non-null value in either column
+  // means a DOB is on file, which is all the data-quality report needs.
   try {
     const rows = await oracleClient.query(`
-      SELECT NAME_ID, TO_CHAR(BIRTH_DATE, 'YYYY-MM-DD') AS DOB
+      SELECT NAME_ID
       FROM OPERA.NAME
       WHERE NAME_ID IN (${holders})
+        AND (BIRTH_DATE IS NOT NULL OR BIRTH_DATE_STR IS NOT NULL)
     `, binds);
-    for (const r of rows) if (r.DOB) out.dobByNameId.set(r.NAME_ID, r.DOB);
+    for (const r of rows) out.dobNameIds.add(r.NAME_ID);
     out.dobChecked = true;
   } catch (err) {
     logger.warn(`Completeness: DOB lookup failed, skipping DOB flag — ${err.message}`);
@@ -866,15 +879,24 @@ async function fetchGuestCompleteness(oracleClient, nameIds) {
     logger.warn(`Completeness: phone lookup failed, skipping Phone flag — ${err.message}`);
   }
 
-  // Passport — best-effort against the standard NAME_DOCUMENTS table. ID_TYPE
-  // coding varies (PASSPORT / P / PASAPORTE), so match permissively.
+  // Passport — NAME_DOCUMENTS rows keyed by a property-specific ID_TYPE code.
+  // The codes were renumbered in Oct 2024 (old 'PAS' -> "NO USAR", new '94' =
+  // "Pasaporte"), so resolve the passport type codes dynamically from
+  // DOCUMENT_TYPES (by PASSPORT role or a Pasaporte/Passport description)
+  // instead of a fixed ID_TYPE pattern. A non-null ID_NUMBER of such a type
+  // means a passport is on file (the number itself is encrypted).
   try {
     const rows = await oracleClient.query(`
-      SELECT DISTINCT NAME_ID
-      FROM OPERA.NAME_DOCUMENTS
-      WHERE NAME_ID IN (${holders})
-        AND ID_NUMBER IS NOT NULL
-        AND (UPPER(ID_TYPE) LIKE 'P%' OR UPPER(ID_TYPE) LIKE '%PASS%' OR UPPER(ID_TYPE) LIKE '%PASA%')
+      SELECT DISTINCT d.NAME_ID
+      FROM OPERA.NAME_DOCUMENTS d
+      WHERE d.NAME_ID IN (${holders})
+        AND d.ID_NUMBER IS NOT NULL
+        AND UPPER(d.ID_TYPE) IN (
+          SELECT UPPER(DOCUMENT_TYPE) FROM OPERA.DOCUMENT_TYPES
+          WHERE UPPER(DOCUMENT_ROLE) = 'PASSPORT'
+             OR UPPER(DESCRIPTION) LIKE '%PASAPORTE%'
+             OR UPPER(DESCRIPTION) LIKE '%PASSPORT%'
+        )
     `, binds);
     for (const r of rows) out.passportNameIds.add(r.NAME_ID);
     out.passportChecked = true;
@@ -1166,10 +1188,12 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     // Data-quality gaps: invalid/missing email plus best-effort DOB/phone/passport.
     const missing = [];
     if (badReason) missing.push('Email');
-    if (completeness.dobChecked && !isValidDob(completeness.dobByNameId.get(nameId), dateStr)) missing.push('DOB');
+    if (completeness.dobChecked && !completeness.dobNameIds.has(nameId)) missing.push('DOB');
     if (completeness.phoneChecked && !completeness.phoneNameIds.has(nameId)) missing.push('Phone');
     if (completeness.passportChecked && !completeness.passportNameIds.has(nameId)) missing.push('Passport');
-    const dob = completeness.dobByNameId.get(nameId) || null;
+    // The DOB itself is encrypted in OPERA, so we can confirm presence but not
+    // display a value (the report's DOB column is left blank by design).
+    const dob = null;
 
     cleanupGuest(guest);
 
