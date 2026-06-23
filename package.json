@@ -15,6 +15,7 @@
     "report:duplicates": "node scripts/duplicate-report.js",
     "report:duplicates:send": "node scripts/duplicate-report.js --send",
     "report:villa-nights": "node scripts/villa-nights-report.js",
+    "report:posting-masters": "node scripts/posting-masters-report.js",
     "prebuild": "rm -rf node_modules && npm ci --omit=dev",
     "postbuild": "npm install",
     "build": "npm run prebuild && npx -y @yao-pkg/pkg@6.19.0 opera-db-sync.js --targets node20-win-x64 --output dist/opera-sync-db.exe && npm run postbuild"

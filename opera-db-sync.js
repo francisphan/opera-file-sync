@@ -25,7 +25,7 @@ const OracleClient = require('./src/oracle-client');
 const SyncState = require('./src/sync-state');
 const Notifier = require('./src/notifier');
 const DailyStats = require('./src/daily-stats');
-const { setupDailySummary, setupFrontDeskReport, setupVillaMapRefresh, setupVillaNightsReport } = require('./src/scheduler');
+const { setupDailySummary, setupFrontDeskReport, setupPostingMastersReport, setupVillaMapRefresh, setupVillaNightsReport } = require('./src/scheduler');
 const { queryGuestsSince, queryFrontDeskReport, queryVillaNightsOutlook } = require('./src/opera-db-query');
 const SheetsClient = require('./src/sheets-client');
 const villaMap = require('./src/villa-map');
@@ -97,6 +97,11 @@ async function initialize() {
   // Note: oracleClient is connected after this, but the queryFn closure captures the variable
   // and only executes at scheduled time, by which point oracleClient is connected.
   setupFrontDeskReport(notifier, dailyStats, (dateStr) => queryFrontDeskReport(oracleClient, dateStr));
+
+  // Twice-weekly posting-masters report (9000-series charge accounts), split out
+  // of the daily front desk report onto a reduced cadence. Reuses the front-desk
+  // query and emails only its postingMasters slice. Same closure pattern.
+  setupPostingMastersReport(notifier, (dateStr) => queryFrontDeskReport(oracleClient, dateStr));
 
   // Weekly villa-rotation outlook (booked nights per villa: this month + next /
   // 3 months / 6 months). Same closure pattern as the front desk report —
