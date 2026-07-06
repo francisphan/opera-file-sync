@@ -1,0 +1,103 @@
+'use strict';
+
+/**
+ * Unit tests for the daily front-desk report layout (buildDailyFrontDeskReport).
+ * The layout is print-oriented: notes render as a full-width row under each
+ * guest instead of a narrow trailing column (which used to stretch printouts
+ * to 9-10 pages), and each guest lives in its own tbody so the guest row and
+ * its notes never split across a printed page.
+ */
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+
+process.env.EMAIL_ENABLED = 'false';
+
+const Notifier = require('../src/notifier');
+
+const guest = (over = {}) => ({
+  firstName: 'Jane',
+  lastName: 'Doe',
+  email: 'jane@example.com',
+  country: 'United States',
+  language: 'English',
+  villa: '020',
+  adults: 2,
+  children: 0,
+  prs: '2/0',
+  checkIn: '2026-07-04',
+  checkOut: '2026-07-09',
+  eta: null,
+  etd: null,
+  notes: null,
+  ...over,
+});
+
+const report = (over = {}) => ({
+  date: '2026-07-06',
+  badEmails: [],
+  inHouse: [],
+  departures: [],
+  arrivalsToday: [],
+  arrivalsTomorrow: [],
+  postingMasters: [],
+  ...over,
+});
+
+const build = (data) => new Notifier().buildDailyFrontDeskReport(data);
+
+test('returns null when there is nothing to report', () => {
+  assert.equal(build(report()), null);
+});
+
+test('notes render as a full-width colspan row, not a trailing column', () => {
+  const built = build(report({ inHouse: [guest({ notes: '[CASHIER] USD 660 upsell pending' })] }));
+  assert.ok(built.htmlBody.includes('colspan="7"'));
+  assert.match(built.htmlBody, /<td colspan="7"[^>]*>\[CASHIER\] USD 660 upsell pending<\/td>/);
+  // No Notes header cell in any guest table
+  assert.ok(!built.htmlBody.includes('>Notes</th>'));
+});
+
+test('guest row and notes row share a page-break-avoiding tbody', () => {
+  const built = build(report({ inHouse: [guest({ notes: 'short note' })] }));
+  const tbody = built.htmlBody.match(/<tbody style="page-break-inside:avoid">[\s\S]*?<\/tbody>/);
+  assert.ok(tbody, 'expected per-guest tbody');
+  assert.ok(tbody[0].includes('Jane Doe'));
+  assert.ok(tbody[0].includes('short note'));
+});
+
+test('guests without notes get no notes row', () => {
+  const built = build(report({ inHouse: [guest()] }));
+  assert.ok(!built.htmlBody.match(/<td colspan="7"[^>]*font-size:11px/));
+});
+
+test('table headers are wrapped in thead so they repeat on printed pages', () => {
+  const built = build(report({
+    inHouse: [guest()],
+    badEmails: [guest({ email: '', reason: 'no email' })],
+  }));
+  assert.ok((built.htmlBody.match(/<thead>/g) || []).length >= 2);
+});
+
+test('CSV attachment still carries notes as a column', () => {
+  const built = build(report({ inHouse: [guest({ notes: 'csv note text' })] }));
+  assert.ok(built.csv.split('\n')[0].endsWith('Notes'));
+  assert.ok(built.csv.includes('csv note text'));
+});
+
+test('posting-master notes render as a colspan-4 sub-row', () => {
+  const built = build(report({
+    postingMasters: [guest({ villa: '9041', notes: 'group charges' })],
+  }));
+  assert.match(built.htmlBody, /<td colspan="4"[^>]*>group charges<\/td>/);
+});
+
+test('plain-text body and subject are unchanged in shape', () => {
+  const built = build(report({
+    inHouse: [guest()],
+    badEmails: [guest({ firstName: 'No', lastName: 'Mail', email: '', reason: 'no email' })],
+  }));
+  assert.equal(built.subject, 'Daily Front Desk Report — 2026-07-06');
+  assert.ok(built.textBody.includes('PRIORITY: 1 guest(s) need email collection'));
+  assert.ok(built.textBody.includes('IN HOUSE (1):'));
+});
