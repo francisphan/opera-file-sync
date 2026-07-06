@@ -162,6 +162,11 @@ function setupFrontDeskReport(notifier, dailyStats, queryFn) {
         const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })).toISOString().slice(0, 10);
         const reportData = await queryFn(today);
         await notifier.sendDailyFrontDeskReport(reportData);
+        // Second daily email off the same query: missing guest data + open
+        // posting masters for the restricted control list. No-op unless
+        // FRONT_DESK_CONTROL_EMAIL_TO is set; when it is set, the daily report
+        // above drops those sections and stays a one-page operations view.
+        await notifier.sendOperationalControlReport(reportData);
         logger.info('Daily front desk report sent (Oracle query)');
       } else {
         // Fallback: use accumulated dailyStats (old behavior)

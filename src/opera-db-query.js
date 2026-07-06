@@ -738,6 +738,8 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   const rows = await oracleClient.query(`
     SELECT n.NAME_ID, n.FIRST, n.LAST, n.LANGUAGE,
            p.PHONE_NUMBER AS EMAIL,
+           ph.PHONE_NUMBER AS PHONE,
+           a.CITY,
            a.COUNTRY,
            TO_CHAR(TRUNC(rn.BEGIN_DATE), 'YYYY-MM-DD') AS CHECK_IN,
            TO_CHAR(TRUNC(rn.END_DATE), 'YYYY-MM-DD') AS CHECK_OUT,
@@ -752,6 +754,18 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       AND n.NAME_TYPE = 'D'
     LEFT JOIN OPERA.NAME_PHONE p ON rn.NAME_ID = p.NAME_ID
       AND p.PHONE_ROLE = 'EMAIL' AND p.PRIMARY_YN = 'Y'
+    LEFT JOIN (
+      -- Best phone per guest for the missing-data check: primary first,
+      -- mobile preferred over landline.
+      SELECT NAME_ID, PHONE_NUMBER,
+             ROW_NUMBER() OVER (
+               PARTITION BY NAME_ID
+               ORDER BY CASE WHEN PRIMARY_YN = 'Y' THEN 0 ELSE 1 END,
+                        CASE PHONE_ROLE WHEN 'MOBILE' THEN 1 WHEN 'PHONE' THEN 2 ELSE 3 END
+             ) AS RNK
+      FROM OPERA.NAME_PHONE
+      WHERE PHONE_ROLE IN ('PHONE', 'MOBILE')
+    ) ph ON rn.NAME_ID = ph.NAME_ID AND ph.RNK = 1
     LEFT JOIN OPERA.NAME_ADDRESS a ON n.NAME_ID = a.NAME_ID
       AND a.PRIMARY_YN = 'Y' AND a.INACTIVE_DATE IS NULL
     LEFT JOIN (
@@ -843,6 +857,8 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       firstName,
       lastName,
       email: rawEmail,
+      phone: (row.PHONE || '').trim() || null,
+      city: (row.CITY || '').trim() || null,
       country: (() => { const code = (row.COUNTRY || '').trim(); try { return code ? countryNames.of(code) || code : ''; } catch { return code; } })(),
       language: mapLanguageToSalesforce(row.LANGUAGE),
       villa,

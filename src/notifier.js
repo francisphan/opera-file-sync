@@ -4,6 +4,34 @@ const logger = require('./logger');
 const { mapLanguageToSalesforce } = require('./guest-utils');
 const { formatVilla } = require('./villa-map');
 
+/**
+ * Human-readable label for a guest's email-collection flag reason.
+ * Shared by the daily front-desk report and the operational-control report.
+ */
+function describeBadEmailReason(g) {
+  const r = g.reason;
+  const labels = {
+    'no email':           'No email on file',
+    'no-email':           'No email on file',
+    'booking-proxy':      'Booking.com proxy address',
+    'expedia-proxy':      'Expedia proxy address',
+    'agent-domain':       'Travel agent / company domain',
+    'missing-first-name': 'Name incomplete (TBC or missing)',
+    'role-mailbox':       'Role mailbox (info@, sales@, reservations@, etc.)',
+    'invalid-mailbox':    'Mailbox does not exist (SMTP rejected)',
+    'domain-unreachable': 'Email domain has no mail server',
+    'invalid-email':      'Invalid email format',
+  };
+  if (!r) return '';
+  const noEmail = r === 'no email' || r === 'no-email';
+  if (labels[r]) {
+    return noEmail || !g.email ? labels[r] : `${labels[r]}: ${g.email}`;
+  }
+  // Free-form reasons from emailInvalidReason() — already include the domain
+  // (e.g. "likely typo of gmail.com (gmial.com)") so we don't append the email.
+  return r;
+}
+
 class Notifier {
   constructor() {
     this.emailEnabled = !!process.env.EMAIL_ENABLED && process.env.EMAIL_ENABLED !== 'false';
@@ -370,35 +398,18 @@ class Notifier {
    * from sendDailyFrontDeskReport so the layout can be unit-tested and
    * previewed (scripts/preview-front-desk-report.js).
    * @param {Object} reportData - From queryFrontDeskReport()
+   * @param {Object} [options]
+   * @param {boolean} [options.includeCollection=true] - Include the email-collection
+   *   priority section. Off when the operational-control email carries it instead.
+   * @param {boolean} [options.includePostingMasters=true] - Include the posting
+   *   masters section. Off when the operational-control email carries it instead.
    * @returns {Object|null} { subject, textBody, htmlBody, csv } or null when empty
    */
-  buildDailyFrontDeskReport(reportData) {
-    const { date, badEmails, inHouse, departures, arrivalsToday, arrivalsTomorrow, postingMasters = [] } = reportData;
+  buildDailyFrontDeskReport(reportData, { includeCollection = true, includePostingMasters = true } = {}) {
+    const { date, inHouse, departures, arrivalsToday, arrivalsTomorrow } = reportData;
+    const badEmails = includeCollection ? reportData.badEmails : [];
+    const postingMasters = includePostingMasters ? (reportData.postingMasters || []) : [];
     const totalGuests = inHouse.length + departures.length + arrivalsToday.length + arrivalsTomorrow.length;
-
-    const describeBadEmailReason = (g) => {
-      const r = g.reason;
-      const labels = {
-        'no email':           'No email on file',
-        'no-email':           'No email on file',
-        'booking-proxy':      'Booking.com proxy address',
-        'expedia-proxy':      'Expedia proxy address',
-        'agent-domain':       'Travel agent / company domain',
-        'missing-first-name': 'Name incomplete (TBC or missing)',
-        'role-mailbox':       'Role mailbox (info@, sales@, reservations@, etc.)',
-        'invalid-mailbox':    'Mailbox does not exist (SMTP rejected)',
-        'domain-unreachable': 'Email domain has no mail server',
-        'invalid-email':      'Invalid email format',
-      };
-      if (!r) return '';
-      const noEmail = r === 'no email' || r === 'no-email';
-      if (labels[r]) {
-        return noEmail || !g.email ? labels[r] : `${labels[r]}: ${g.email}`;
-      }
-      // Free-form reasons from emailInvalidReason() — already include the domain
-      // (e.g. "likely typo of gmail.com (gmial.com)") so we don't append the email.
-      return r;
-    };
 
     if (totalGuests === 0 && badEmails.length === 0 && postingMasters.length === 0) {
       return null;
@@ -675,7 +686,14 @@ class Notifier {
   async sendDailyFrontDeskReport(reportData) {
     if (!this.frontDeskEmailTo) return;
 
-    const built = this.buildDailyFrontDeskReport(reportData);
+    // When the operational-control email is configured it owns the
+    // email-collection and posting-masters content, and this report slims down
+    // to the one-page operations view (in house / departures / arrivals).
+    const controlConfigured = !!process.env.FRONT_DESK_CONTROL_EMAIL_TO;
+    const built = this.buildDailyFrontDeskReport(reportData, {
+      includeCollection: !controlConfigured,
+      includePostingMasters: !controlConfigured
+    });
     if (!built) {
       logger.info('Daily front desk report: no guests to report');
       return;
@@ -689,6 +707,148 @@ class Notifier {
 
     await this._sendEmailToRecipients(this.frontDeskEmailTo, built.subject, built.textBody, built.htmlBody, attachments);
     logger.info(`Daily front desk report sent to ${this.frontDeskEmailTo}: ${reportData.badEmails.length} bad emails`);
+  }
+
+  /**
+   * Build the operational-control email: on-property guests (in house or
+   * departing today) missing critical profile data — email, phone, city —
+   * plus all currently open Posting Masters. Passport and date of birth are
+   * planned but blocked on OPERA schema discovery (issue #9).
+   * @param {Object} reportData - From queryFrontDeskReport()
+   * @returns {Object|null} { subject, textBody, htmlBody } or null when empty
+   */
+  buildOperationalControlReport(reportData) {
+    const { date, inHouse = [], departures = [], postingMasters = [] } = reportData;
+
+    const missingFields = (g) => {
+      const missing = [];
+      // reason set = email absent, invalid, or non-personal (agent/role/etc.)
+      if (g.reason || !(g.email || '').trim()) missing.push('Email');
+      if (!g.phone) missing.push('Phone');
+      if (!g.city) missing.push('City');
+      return missing;
+    };
+
+    const incomplete = [...inHouse, ...departures]
+      .map(g => ({ g, missing: missingFields(g) }))
+      .filter(x => x.missing.length > 0)
+      .sort((a, b) => (a.g.lastName + a.g.firstName).localeCompare(b.g.lastName + b.g.firstName));
+
+    if (incomplete.length === 0 && postingMasters.length === 0) return null;
+
+    const subject = `Front Desk Control — Missing Guest Data & Posting Masters (${date})`;
+
+    // Plain text fallback
+    const textLines = [`Front Desk Control — ${date}\n`];
+    if (incomplete.length > 0) {
+      textLines.push(`MISSING GUEST DATA (${incomplete.length}):`);
+      incomplete.forEach(({ g, missing }) => {
+        const detail = describeBadEmailReason(g);
+        textLines.push(`  - ${g.firstName} ${g.lastName} | Villa: ${formatVilla(g.villa) || '—'} | Missing: ${missing.join(', ')}${detail ? ` | ${detail}` : ''}`);
+      });
+      textLines.push('');
+    }
+    if (postingMasters.length > 0) {
+      textLines.push(`OPEN POSTING MASTERS (${postingMasters.length}):`);
+      postingMasters.forEach(g => {
+        textLines.push(`  - ${g.firstName} ${g.lastName} | ${formatVilla(g.villa) || '—'} | ${g.checkIn}→${g.checkOut}`);
+      });
+      textLines.push('');
+    }
+    const textBody = textLines.join('\n');
+
+    // HTML — same compact print-friendly conventions as the daily report
+    const tableStyle = 'border-collapse:collapse;width:100%;font-size:12px;margin-bottom:16px';
+    const thStyle = 'padding:4px 8px;border:1px solid #ddd;text-align:left;white-space:nowrap;background:#f5f5f5';
+    const tdStyle = 'padding:4px 8px;border:1px solid #ddd';
+    const tdNowrap = 'padding:4px 8px;border:1px solid #ddd;white-space:nowrap';
+    const chip = (label) => `<span style="display:inline-block;padding:1px 8px;margin:1px 2px;border:1px solid #ef9a9a;border-radius:999px;background:#ffebee;color:#c62828;font-size:11px;white-space:nowrap">${label}</span>`;
+
+    let htmlBody = `
+      <h2 style="margin-bottom:4px">Front Desk Control</h2>
+      <p style="color:#666;margin-top:0"><strong>Date:</strong> ${date}</p>`;
+
+    if (incomplete.length > 0) {
+      htmlBody += `
+        <h3 style="margin:14px 0 6px;padding:6px 10px;background:#e53935;color:#fff;border-radius:4px;font-size:13px">
+          Missing Guest Data — ${incomplete.length} guest(s) in house / departing
+        </h3>
+        <table style="${tableStyle}">
+          <thead>
+          <tr>
+            <th style="${thStyle}">Name</th>
+            <th style="${thStyle}">Villa</th>
+            <th style="${thStyle}">Missing</th>
+            <th style="${thStyle}">Email issue</th>
+            <th style="${thStyle}">Check-in</th>
+            <th style="${thStyle}">Check-out</th>
+          </tr>
+          </thead>
+          <tbody>
+          ${incomplete.map(({ g, missing }) => `
+          <tr>
+            <td style="${tdStyle}">${g.firstName} ${g.lastName}${g.companionNames ? `<br><span style="font-size:11px;color:#666">+${g.companionNames}</span>` : ''}</td>
+            <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
+            <td style="${tdStyle}">${missing.map(chip).join('')}</td>
+            <td style="${tdStyle};font-size:11px;color:#c62828">${describeBadEmailReason(g)}</td>
+            <td style="${tdNowrap}">${g.checkIn}</td>
+            <td style="${tdNowrap}">${g.checkOut}</td>
+          </tr>`).join('')}
+          </tbody>
+        </table>
+        <p style="color:#666;font-size:11px;margin-top:2px">Missing checks cover Email, Phone and City. Passport and Date of Birth checks are pending OPERA schema discovery.</p>`;
+    }
+
+    if (postingMasters.length > 0) {
+      htmlBody += `
+        <h3 style="margin:14px 0 6px;padding:6px 10px;background:#9e9e9e;color:#fff;border-radius:4px;font-size:13px">
+          Open Posting Masters — ${postingMasters.length}
+        </h3>
+        <table style="${tableStyle}">
+          <thead>
+          <tr>
+            <th style="${thStyle}">Name</th>
+            <th style="${thStyle}">Villa</th>
+            <th style="${thStyle}">Check-in</th>
+            <th style="${thStyle}">Check-out</th>
+          </tr>
+          </thead>
+          ${postingMasters.map(g => `
+          <tbody style="page-break-inside:avoid">
+          <tr>
+            <td style="${tdStyle}">${g.firstName} ${g.lastName}</td>
+            <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
+            <td style="${tdNowrap}">${g.checkIn}</td>
+            <td style="${tdNowrap}">${g.checkOut}</td>
+          </tr>${g.notes ? `
+          <tr>
+            <td colspan="4" style="${tdStyle};border-top:0;font-size:11px;color:#444">${g.notes}</td>
+          </tr>` : ''}
+          </tbody>`).join('')}
+        </table>`;
+    }
+
+    return { subject, textBody, htmlBody };
+  }
+
+  /**
+   * Send the operational-control email to its restricted recipient list
+   * (FRONT_DESK_CONTROL_EMAIL_TO / _CC). No-op when not configured.
+   * @param {Object} reportData - From queryFrontDeskReport()
+   */
+  async sendOperationalControlReport(reportData) {
+    const to = process.env.FRONT_DESK_CONTROL_EMAIL_TO;
+    if (!to) return;
+    const cc = process.env.FRONT_DESK_CONTROL_EMAIL_CC || null;
+
+    const built = this.buildOperationalControlReport(reportData);
+    if (!built) {
+      logger.info('Operational control report: nothing to report');
+      return;
+    }
+
+    await this._sendEmailToRecipients(to, built.subject, built.textBody, built.htmlBody, [], cc);
+    logger.info(`Operational control report sent to ${to}${cc ? ` (cc ${cc})` : ''}`);
   }
 
   /**
