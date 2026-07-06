@@ -271,6 +271,36 @@ function isAgentEmail(customer) {
 }
 
 /**
+ * Parse a comma-separated list of full guest names (FRONT_DESK_EXCLUDE_GUESTS)
+ * into a Set of normalized "first last" keys for case-insensitive matching.
+ * Used to keep staff profiles out of the front-desk email-collection section.
+ * @param {string} envValue - e.g. "Brenda Carrion, Camila Rosi"
+ * @returns {Set<string>} Normalized name keys
+ */
+function parseExcludedGuestNames(envValue) {
+  return new Set(
+    (envValue || '')
+      .split(',')
+      .map(s => s.trim().toLowerCase().replace(/\s+/g, ' '))
+      .filter(Boolean)
+  );
+}
+
+/**
+ * Check whether a guest's full name is in the exclusion set from
+ * parseExcludedGuestNames().
+ * @param {Object} guest - Object with firstName and lastName
+ * @param {Set<string>} excludedNames - From parseExcludedGuestNames()
+ * @returns {boolean}
+ */
+function isExcludedGuest(guest, excludedNames) {
+  if (!excludedNames || excludedNames.size === 0) return false;
+  const key = `${guest.firstName || ''} ${guest.lastName || ''}`
+    .trim().toLowerCase().replace(/\s+/g, ' ');
+  return excludedNames.has(key);
+}
+
+/**
  * Map Oracle language codes to Salesforce picklist values
  * @param {string} oracleLanguage - Language code from Oracle NAME.LANGUAGE
  * @returns {string} Salesforce Language__c picklist value (English, Spanish, Portuguese, Unknown)
@@ -555,6 +585,8 @@ module.exports = {
   isRoleMailbox,
   isDisposableDomain,
   isProviderTypo,
+  parseExcludedGuestNames,
+  isExcludedGuest,
   transformToContact,
   transformToTVRSGuest,
   mapLanguageToSalesforce,

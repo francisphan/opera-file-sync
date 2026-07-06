@@ -8,7 +8,7 @@
 
 const logger = require('./logger');
 const villaMap = require('./villa-map');
-const { sanitizeEmail, emailInvalidReason, isAgentEmail, isRoleMailbox, mapLanguageToSalesforce, verifyEmailsSMTP } = require('./guest-utils');
+const { sanitizeEmail, emailInvalidReason, isAgentEmail, isRoleMailbox, mapLanguageToSalesforce, verifyEmailsSMTP, parseExcludedGuestNames, isExcludedGuest } = require('./guest-utils');
 
 const countryNames = new Intl.DisplayNames(['en'], { type: 'region' });
 
@@ -731,6 +731,10 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
 
   logger.info(`Front desk report: querying guests for ${dateStr} (tomorrow: ${tomorrowStr})`);
 
+  // Staff/internal profiles front desk asked to keep out of the email-collection
+  // section. They still appear in the regular report sections.
+  const excludedGuests = parseExcludedGuestNames(process.env.FRONT_DESK_EXCLUDE_GUESTS);
+
   // Oracle returns dates as YYYY-MM-DD strings via TO_CHAR — no JS Date timezone issues
   // Join through RESERVATION_DAILY_ELEMENT_NAME → RESERVATION_DAILY_ELEMENTS to get Room + Adults/Children
   // Notes are fetched separately below from NAME_COMMENT, NAME$NOTES, RESERVATION_COMMENT,
@@ -750,8 +754,23 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     FROM OPERA.RESERVATION_NAME rn
     JOIN OPERA.NAME n ON rn.NAME_ID = n.NAME_ID
       AND n.NAME_TYPE = 'D'
-    LEFT JOIN OPERA.NAME_PHONE p ON rn.NAME_ID = p.NAME_ID
-      AND p.PHONE_ROLE = 'EMAIL' AND p.PRIMARY_YN = 'Y'
+    LEFT JOIN (
+      -- Best email per guest: primary EMAIL row first, then any EMAIL row,
+      -- then any phone row holding an address (front desk sometimes types the
+      -- email under a phone type like HOME — it must not read as "no email").
+      SELECT NAME_ID, PHONE_NUMBER,
+             ROW_NUMBER() OVER (
+               PARTITION BY NAME_ID
+               ORDER BY CASE
+                          WHEN PHONE_ROLE = 'EMAIL' AND PRIMARY_YN = 'Y' THEN 0
+                          WHEN PHONE_ROLE = 'EMAIL' THEN 1
+                          ELSE 2
+                        END,
+                        UPDATE_DATE DESC NULLS LAST, INSERT_DATE DESC NULLS LAST
+             ) AS RNK
+      FROM OPERA.NAME_PHONE
+      WHERE PHONE_ROLE = 'EMAIL' OR PHONE_NUMBER LIKE '%@%'
+    ) p ON rn.NAME_ID = p.NAME_ID AND p.RNK = 1
     LEFT JOIN OPERA.NAME_ADDRESS a ON n.NAME_ID = a.NAME_ID
       AND a.PRIMARY_YN = 'Y' AND a.INACTIVE_DATE IS NULL
     LEFT JOIN (
@@ -940,7 +959,10 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     const isCheckInTomorrow = checkInDate === tomorrowStr;
     const isCheckOutToday = checkOutDate === dateStr;
     const isInHouse = checkInDate < dateStr && checkOutDate > dateStr;
-    const isOnProperty = checkInDate <= dateStr && checkOutDate >= dateStr;
+    // Email collection starts the day AFTER arrival — front desk can't collect
+    // anything from a guest who hasn't checked in yet, so same-day arrivals
+    // must not be flagged (they were the report's most common false positive).
+    const arrivedBeforeToday = checkInDate < dateStr && checkOutDate >= dateStr;
 
     // Format companion names into display name
     if (guest.companions.length > 0) {
@@ -959,7 +981,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       continue;
     }
 
-    if (badReason && isOnProperty) {
+    if (badReason && arrivedBeforeToday && !isExcludedGuest(guest, excludedGuests)) {
       badEmails.push({ ...guest });
     }
 

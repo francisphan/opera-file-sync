@@ -15,6 +15,8 @@ const {
   isRoleMailbox,
   isDisposableDomain,
   isProviderTypo,
+  parseExcludedGuestNames,
+  isExcludedGuest,
   mapLanguageToSalesforce,
   transformToContact,
   transformToTVRSGuest,
@@ -927,5 +929,37 @@ describe('classifyRcptReject', () => {
   test('ambiguous 5xx is conservative (unknown)', () => {
     assert.equal(classifyRcptReject('550 administrative prohibition'), 'unknown');
     assert.equal(classifyRcptReject(''), 'unknown');
+  });
+});
+
+describe('parseExcludedGuestNames / isExcludedGuest', () => {
+  test('parses comma-separated names, normalizing case and whitespace', () => {
+    const set = parseExcludedGuestNames(' Brenda  Carrion ,CAMILA ROSI,, ');
+    assert.equal(set.size, 2);
+    assert.ok(set.has('brenda carrion'));
+    assert.ok(set.has('camila rosi'));
+  });
+
+  test('empty or unset env yields empty set', () => {
+    assert.equal(parseExcludedGuestNames('').size, 0);
+    assert.equal(parseExcludedGuestNames(undefined).size, 0);
+  });
+
+  test('matches guests case-insensitively with collapsed whitespace', () => {
+    const set = parseExcludedGuestNames('Brenda Carrion');
+    assert.ok(isExcludedGuest({ firstName: 'BRENDA', lastName: 'carrion' }, set));
+    assert.ok(isExcludedGuest({ firstName: ' Brenda ', lastName: 'Carrion' }, set));
+    assert.ok(!isExcludedGuest({ firstName: 'Brenda', lastName: 'Carrio' }, set));
+  });
+
+  test('never matches when the set is empty or missing', () => {
+    assert.ok(!isExcludedGuest({ firstName: 'Brenda', lastName: 'Carrion' }, new Set()));
+    assert.ok(!isExcludedGuest({ firstName: 'Brenda', lastName: 'Carrion' }, null));
+  });
+
+  test('handles missing name fields without throwing', () => {
+    const set = parseExcludedGuestNames('Brenda Carrion');
+    assert.ok(!isExcludedGuest({ firstName: null, lastName: null }, set));
+    assert.ok(!isExcludedGuest({}, set));
   });
 });
