@@ -397,18 +397,18 @@ class Notifier {
   }
 
   /**
-   * Send comprehensive daily front desk report with all on-property activity
+   * Build the daily front desk report content without sending it. Extracted
+   * from sendDailyFrontDeskReport so the layout can be unit-tested and
+   * previewed (scripts/preview-front-desk-report.js).
    * @param {Object} reportData - From queryFrontDeskReport()
+   * @returns {Object|null} { subject, textBody, htmlBody, csv } or null when empty
    */
-  async sendDailyFrontDeskReport(reportData) {
-    if (!this.frontDeskEmailTo) return;
-
+  buildDailyFrontDeskReport(reportData) {
     const { date, inHouse, departures, arrivalsToday, arrivalsTomorrow, arrivalsDayAfter = [], postingMasters = [] } = reportData;
     const totalGuests = inHouse.length + departures.length + arrivalsToday.length + arrivalsTomorrow.length + arrivalsDayAfter.length;
 
     if (totalGuests === 0 && postingMasters.length === 0) {
-      logger.info('Daily front desk report: no guests to report');
-      return;
+      return null;
     }
 
     const subject = `Daily Front Desk Report — ${date}`;
@@ -435,11 +435,23 @@ class Notifier {
     }
     const textBody = textLines.join('\n');
 
-    // HTML email
-    const tableStyle = 'border-collapse:collapse;width:100%;font-size:13px;margin-bottom:20px';
-    const thStyle = 'padding:6px 10px;border:1px solid #ddd;text-align:left;white-space:nowrap';
-    const tdStyle = 'padding:6px 10px;border:1px solid #ddd';
-    const tdNowrap = 'padding:6px 10px;border:1px solid #ddd;white-space:nowrap';
+    // HTML email — layout tuned for printing from Gmail (front desk prints this
+    // daily): compact cells, and notes rendered as a full-width row under each
+    // guest instead of a narrow column. The old notes *column* wrapped a few
+    // characters per line and stretched printouts to 9-10 pages.
+    const tableStyle = 'border-collapse:collapse;width:100%;font-size:12px;margin-bottom:16px';
+    const thStyle = 'padding:4px 8px;border:1px solid #ddd;text-align:left;white-space:nowrap;background:#f5f5f5';
+    const tdStyle = 'padding:4px 8px;border:1px solid #ddd';
+    const tdNowrap = 'padding:4px 8px;border:1px solid #ddd;white-space:nowrap';
+
+    // Full-width notes row directly under the guest row. border-top:0 visually
+    // attaches it to its guest.
+    const notesRow = (g, cols) => (g.notes
+      ? `
+      <tr>
+        <td colspan="${cols}" style="${tdStyle};border-top:0;font-size:11px;color:#444">${g.notes}</td>
+      </tr>`
+      : '');
 
     const nameCell = (g) => {
       let name = `${g.firstName} ${g.lastName}`;
@@ -451,7 +463,10 @@ class Notifier {
     // no structured time fields here), so flag them with a "~" to signal that.
     const estTime = (t) => (t ? `~${t}` : '—');
 
+    // Each guest is its own <tbody> so the guest row and its notes row stay
+    // together across printed page breaks (page-break-inside:avoid).
     const guestRow = (g) => `
+      <tbody style="page-break-inside:avoid">
       <tr>
         <td style="${tdStyle}">${nameCell(g)}</td>
         <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
@@ -460,8 +475,8 @@ class Notifier {
         <td style="${tdNowrap}">${g.checkOut}</td>
         <td style="${tdStyle}">${g.country}</td>
         <td style="${tdStyle}">${g.language}</td>
-        <td style="${tdStyle};font-size:11px">${g.notes || ''}</td>
-      </tr>`;
+      </tr>${notesRow(g, 7)}
+      </tbody>`;
 
     const tableHeaders = `
       <tr>
@@ -472,10 +487,10 @@ class Notifier {
         <th style="${thStyle}">Check-out</th>
         <th style="${thStyle}">Country</th>
         <th style="${thStyle}">Language</th>
-        <th style="${thStyle}">Notes</th>
       </tr>`;
 
     const arrivalRow = (g) => `
+      <tbody style="page-break-inside:avoid">
       <tr>
         <td style="${tdStyle}">${nameCell(g)}</td>
         <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
@@ -484,8 +499,8 @@ class Notifier {
         <td style="${tdNowrap}">${g.checkOut}</td>
         <td style="${tdStyle}">${g.country}</td>
         <td style="${tdStyle}">${g.language}</td>
-        <td style="${tdStyle};font-size:11px">${g.notes || ''}</td>
-      </tr>`;
+      </tr>${notesRow(g, 7)}
+      </tbody>`;
 
     const arrivalHeaders = `
       <tr>
@@ -496,11 +511,11 @@ class Notifier {
         <th style="${thStyle}">Check-out</th>
         <th style="${thStyle}">Country</th>
         <th style="${thStyle}">Language</th>
-        <th style="${thStyle}">Notes</th>
       </tr>`;
 
     // Departures show estimated time-out (ETD) in place of the check-in date.
     const departureRow = (g) => `
+      <tbody style="page-break-inside:avoid">
       <tr>
         <td style="${tdStyle}">${nameCell(g)}</td>
         <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
@@ -509,8 +524,8 @@ class Notifier {
         <td style="${tdNowrap}">${g.checkOut}</td>
         <td style="${tdStyle}">${g.country}</td>
         <td style="${tdStyle}">${g.language}</td>
-        <td style="${tdStyle};font-size:11px">${g.notes || ''}</td>
-      </tr>`;
+      </tr>${notesRow(g, 7)}
+      </tbody>`;
 
     const departureHeaders = `
       <tr>
@@ -521,7 +536,6 @@ class Notifier {
         <th style="${thStyle}">Check-out</th>
         <th style="${thStyle}">Country</th>
         <th style="${thStyle}">Language</th>
-        <th style="${thStyle}">Notes</th>
       </tr>`;
 
     const prsTotal = (guests) => guests.reduce((sum, g) => sum + (g.adults || 0) + (g.children || 0), 0);
@@ -531,14 +545,17 @@ class Notifier {
       const total = prsTotal(guests);
       const hdrs = variant === 'arrival' ? arrivalHeaders : variant === 'departure' ? departureHeaders : tableHeaders;
       const rowFn = variant === 'arrival' ? arrivalRow : variant === 'departure' ? departureRow : guestRow;
+      // <thead> makes browsers repeat the header row on every printed page.
       return `
-        <h3 style="margin:20px 0 8px;padding:8px 12px;background:${color};color:#fff;border-radius:4px;font-size:14px">${title}</h3>
+        <h3 style="margin:14px 0 6px;padding:6px 10px;background:${color};color:#fff;border-radius:4px;font-size:13px">${title}</h3>
         <table style="${tableStyle}">
-          ${hdrs}
+          <thead>${hdrs}</thead>
           ${guests.map(rowFn).join('')}
+          <tbody>
           <tr style="background:#f9f9f9">
-            <td colspan="8" style="${tdStyle};font-weight:bold;font-size:12px">Total: ${total} guest(s)</td>
+            <td colspan="7" style="${tdStyle};font-weight:bold">Total: ${total} guest(s)</td>
           </tr>
+          </tbody>
         </table>`;
     };
 
@@ -554,26 +571,28 @@ class Notifier {
 
     if (postingMasters.length > 0) {
       htmlBody += `
-        <h3 style="margin:20px 0 8px;padding:8px 12px;background:#9e9e9e;color:#fff;border-radius:4px;font-size:14px">
+        <h3 style="margin:14px 0 6px;padding:6px 10px;background:#9e9e9e;color:#fff;border-radius:4px;font-size:13px">
           Posting Masters — ${postingMasters.length} (charge accounts, not real stays)
         </h3>
         <p style="color:#666;font-size:12px;margin:0 0 8px">These are 9000-series accounts used to track charges. No email collection needed.</p>
         <table style="${tableStyle}">
+          <thead>
           <tr>
             <th style="${thStyle}">Name</th>
             <th style="${thStyle}">Villa</th>
             <th style="${thStyle}">Check-in</th>
             <th style="${thStyle}">Check-out</th>
-            <th style="${thStyle}">Notes</th>
           </tr>
+          </thead>
           ${postingMasters.map(g => `
+          <tbody style="page-break-inside:avoid">
           <tr>
             <td style="${tdStyle}">${nameCell(g)}</td>
             <td style="${tdNowrap}">${formatVilla(g.villa) || '—'}</td>
             <td style="${tdNowrap}">${g.checkIn}</td>
             <td style="${tdNowrap}">${g.checkOut}</td>
-            <td style="${tdStyle};font-size:11px">${g.notes || ''}</td>
-          </tr>`).join('')}
+          </tr>${notesRow(g, 4)}
+          </tbody>`).join('')}
         </table>`;
     }
 
@@ -614,14 +633,30 @@ class Notifier {
     addCsvRows('Arrivals 2 Days Out', arrivalsDayAfter);
     addCsvRows('Posting Master', postingMasters);
 
+    return { subject, textBody, htmlBody, csv: csvRows.join('\n') };
+  }
+
+  /**
+   * Send comprehensive daily front desk report with all on-property activity
+   * @param {Object} reportData - From queryFrontDeskReport()
+   */
+  async sendDailyFrontDeskReport(reportData) {
+    if (!this.frontDeskEmailTo) return;
+
+    const built = this.buildDailyFrontDeskReport(reportData);
+    if (!built) {
+      logger.info('Daily front desk report: no guests to report');
+      return;
+    }
+
     const attachments = [{
-      filename: `front-desk-report-${date}.csv`,
-      content: csvRows.join('\n'),
+      filename: `front-desk-report-${reportData.date}.csv`,
+      content: built.csv,
       contentType: 'text/csv'
     }];
 
-    await this._sendEmailToRecipients(this.frontDeskEmailTo, subject, textBody, htmlBody, attachments);
-    logger.info(`Daily front desk report sent to ${this.frontDeskEmailTo}: ${totalGuests} guests`);
+    await this._sendEmailToRecipients(this.frontDeskEmailTo, built.subject, built.textBody, built.htmlBody, attachments);
+    logger.info(`Daily front desk report sent to ${this.frontDeskEmailTo}`);
   }
 
   /**

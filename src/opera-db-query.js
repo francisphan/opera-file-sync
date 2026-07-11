@@ -8,7 +8,7 @@
 
 const logger = require('./logger');
 const villaMap = require('./villa-map');
-const { sanitizeEmail, emailInvalidReason, isAgentEmail, isRoleMailbox, mapLanguageToSalesforce, verifyEmailsSMTP } = require('./guest-utils');
+const { sanitizeEmail, emailInvalidReason, isAgentEmail, isRoleMailbox, mapLanguageToSalesforce, verifyEmailsSMTP, parseExcludedGuestNames, isExcludedGuest } = require('./guest-utils');
 const { expandCountry } = require('./country-names');
 
 // Internal/excluded email domains and addresses — these are skipped during sync
@@ -942,6 +942,11 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
 
   logger.info(`Front desk report: querying guests for ${dateStr} (tomorrow: ${tomorrowStr}, day-after: ${dayAfterStr})`);
 
+  // Staff/internal profiles front desk asked to keep out of the data-quality
+  // report (e.g. staff parked on villas). They still appear in the regular
+  // report sections.
+  const excludedGuests = parseExcludedGuestNames(process.env.FRONT_DESK_EXCLUDE_GUESTS);
+
   // Oracle returns dates as YYYY-MM-DD strings via TO_CHAR — no JS Date timezone issues
   // Join through RESERVATION_DAILY_ELEMENT_NAME → RESERVATION_DAILY_ELEMENTS to get Room + Adults/Children
   // Notes are fetched separately below from NAME_COMMENT, NAME$NOTES, RESERVATION_COMMENT,
@@ -949,6 +954,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   const rows = await oracleClient.query(`
     SELECT n.NAME_ID, n.FIRST, n.LAST, n.LANGUAGE,
            p.PHONE_NUMBER AS EMAIL,
+           a.CITY,
            a.COUNTRY,
            TO_CHAR(TRUNC(rn.BEGIN_DATE), 'YYYY-MM-DD') AS CHECK_IN,
            TO_CHAR(TRUNC(rn.END_DATE), 'YYYY-MM-DD') AS CHECK_OUT,
@@ -961,8 +967,23 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     FROM OPERA.RESERVATION_NAME rn
     JOIN OPERA.NAME n ON rn.NAME_ID = n.NAME_ID
       AND n.NAME_TYPE = 'D'
-    LEFT JOIN OPERA.NAME_PHONE p ON rn.NAME_ID = p.NAME_ID
-      AND p.PHONE_ROLE = 'EMAIL' AND p.PRIMARY_YN = 'Y'
+    LEFT JOIN (
+      -- Best email per guest: primary EMAIL row first, then any EMAIL row,
+      -- then any phone row holding an address (front desk sometimes types the
+      -- email under a phone type like HOME — it must not read as "no email").
+      SELECT NAME_ID, PHONE_NUMBER,
+             ROW_NUMBER() OVER (
+               PARTITION BY NAME_ID
+               ORDER BY CASE
+                          WHEN PHONE_ROLE = 'EMAIL' AND PRIMARY_YN = 'Y' THEN 0
+                          WHEN PHONE_ROLE = 'EMAIL' THEN 1
+                          ELSE 2
+                        END,
+                        UPDATE_DATE DESC NULLS LAST, INSERT_DATE DESC NULLS LAST
+             ) AS RNK
+      FROM OPERA.NAME_PHONE
+      WHERE PHONE_ROLE = 'EMAIL' OR PHONE_NUMBER LIKE '%@%'
+    ) p ON rn.NAME_ID = p.NAME_ID AND p.RNK = 1
     LEFT JOIN OPERA.NAME_ADDRESS a ON n.NAME_ID = a.NAME_ID
       AND a.PRIMARY_YN = 'Y' AND a.INACTIVE_DATE IS NULL
     LEFT JOIN (
@@ -1059,6 +1080,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       firstName,
       lastName,
       email: rawEmail,
+      city: (row.CITY || '').trim() || null,
       country: expandCountry(row.COUNTRY),
       language: mapLanguageToSalesforce(row.LANGUAGE),
       villa,
@@ -1191,6 +1213,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     if (completeness.dobChecked && !completeness.dobNameIds.has(nameId)) missing.push('DOB');
     if (completeness.phoneChecked && !completeness.phoneNameIds.has(nameId)) missing.push('Phone');
     if (completeness.passportChecked && !completeness.passportNameIds.has(nameId)) missing.push('Passport');
+    if (!guest.city) missing.push('City');
     // The DOB itself is encrypted in OPERA, so we can confirm presence but not
     // display a value (the report's DOB column is left blank by design).
     const dob = null;
@@ -1204,7 +1227,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     else if (isCheckInDayAfter) { section = 'Arrivals (2 days out)'; arrivalsDayAfter.push(guest); }
     else if (isInHouse) { section = 'In House'; inHouse.push(guest); }
 
-    if (section && missing.length > 0) {
+    if (section && missing.length > 0 && !isExcludedGuest(guest, excludedGuests)) {
       dataQuality.push({
         firstName: guest.firstName,
         lastName: guest.lastName,

@@ -5,7 +5,7 @@
   "main": "opera-db-sync.js",
   "scripts": {
     "start": "node opera-db-sync.js",
-    "test": "node --test tests/test-guest-utils.js tests/test-unit-core.js tests/test-note-date-filter.js",
+    "test": "node --test tests/test-guest-utils.js tests/test-unit-core.js tests/test-note-date-filter.js tests/test-front-desk-report.js tests/test-front-desk-layout.js",
     "test:integration": "node tests/test-connection.js",
     "test:oracle": "node tests/test-oracle-connection.js",
     "test:notifications": "node tests/test-notifications.js",
