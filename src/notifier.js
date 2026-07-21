@@ -946,6 +946,171 @@ class Notifier {
   }
 
   /**
+   * Send the weekly villa-rotation outlook: booked nights per villa across the
+   * three forward horizons (current month + next / 3 months / 6 months), so
+   * reservations can distribute upcoming assignments evenly. Windows nest —
+   * the wider columns include the narrower ones.
+   * @param {Object} reportData - From queryVillaNightsOutlook(): { windows: [...] }
+   * @param {string} [toOverride] - Recipient override (defaults to VILLA_REPORT_EMAIL_TO / admin)
+   * @param {string} [ccOverride]
+   */
+  async sendVillaNightsOutlook(reportData, toOverride, ccOverride) {
+    const to = toOverride || process.env.VILLA_REPORT_EMAIL_TO || this.emailTo;
+    const cc = ccOverride || process.env.VILLA_REPORT_EMAIL_CC || null;
+    if (!this.emailEnabled || !to) {
+      logger.info('Villa rotation outlook: email disabled or no recipient configured — skipping');
+      return false;
+    }
+
+    const { windows } = reportData;
+    const widest = windows[windows.length - 1];
+
+    const monthLabel = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+    // endDate is an exclusive first-of-month; the last covered month is the one before it.
+    const lastMonth = (endIso) => {
+      const d = new Date(`${endIso}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - 1);
+      return monthLabel(d.toISOString().slice(0, 10));
+    };
+    const windowRange = (w) => `${monthLabel(w.startDate)} – ${lastMonth(w.endDate)}`;
+
+    const subject = `Villa Rotation Outlook — ${monthLabel(widest.startDate)} to ${lastMonth(widest.endDate)}`;
+
+    // Per-villa lookup per window (all windows share the same villa set/order).
+    const byVilla = windows.map(w => new Map(w.villas.map(v => [v.villa, v])));
+    const villaOrder = widest.villas.map(v => v.villa);
+
+    const pct = (n, d) => (d > 0 ? Math.round((n / d) * 100) : 0);
+
+    // ── Plain-text fallback ──
+    const textLines = [
+      `Villa Rotation Outlook`,
+      ...windows.map(w => `${w.label} (${windowRange(w)}): ${w.totals.nights} nights booked across ${w.totals.occupiedVillas}/${w.totals.villas} villas (${w.totals.compNights} comp / ${w.totals.paidNights} paid)`),
+      ``,
+      `NIGHTS PER VILLA (columns: ${windows.map(w => w.label).join(' | ')}):`,
+      ...villaOrder.map(villa => {
+        const cells = byVilla.map(m => {
+          const v = m.get(villa);
+          return v && v.nights > 0 ? `${v.nights}${v.compNights > 0 ? ` (${v.compNights}c)` : ''}` : '0';
+        });
+        return `  ${formatVilla(villa) || villa}: ${cells.join(' | ')}`;
+      }),
+      ``,
+      `BY RATE CODE (${widest.label}):`,
+      ...widest.rateCodes.map(rc => `  ${rc.code}: ${rc.nights} nights (${rc.compNights} comp / ${rc.paidNights} paid)`)
+    ];
+    const textBody = textLines.join('\n');
+
+    // ── HTML ──
+    const tableStyle = 'border-collapse:collapse;width:100%;font-size:16px;margin-bottom:20px';
+    const thStyle = 'padding:9px 13px;border:1px solid #ddd;text-align:left;white-space:nowrap';
+    const tdStyle = 'padding:9px 13px;border:1px solid #ddd';
+    const tdNum = 'padding:9px 13px;border:1px solid #ddd;text-align:right;white-space:nowrap';
+
+    const nightsCell = (v) => {
+      if (!v || v.nights === 0) return '<span style="color:#2e7d32">0</span>';
+      const comp = v.compNights > 0 ? ` <span style="color:#c62828;font-size:13px">(${v.compNights}c)</span>` : '';
+      return `${v.nights}${comp}`;
+    };
+
+    const htmlBody = `
+      <div style="font-size:16px;line-height:1.45">
+      <h2 style="margin-bottom:4px;font-size:24px">Villa Rotation Outlook</h2>
+      <p style="color:#666;margin-top:0;font-size:16px">Booked nights per villa over the next months — for distributing upcoming assignments evenly. Columns are cumulative: wider windows include the narrower ones.</p>
+
+      <table style="border-collapse:collapse;margin:12px 0 24px;font-size:16px">
+        <tr style="background:#e3f2fd">
+          <th style="${thStyle}">Window</th>
+          <th style="${thStyle}">Months</th>
+          <th style="${thStyle};text-align:right">Nights booked</th>
+          <th style="${thStyle};text-align:right">Villas with nights</th>
+          <th style="${thStyle};text-align:right">Comp</th>
+          <th style="${thStyle};text-align:right">Paid</th>
+        </tr>
+        ${windows.map(w => `
+        <tr>
+          <td style="${tdStyle};font-weight:bold;white-space:nowrap">${w.label}</td>
+          <td style="${tdStyle};white-space:nowrap">${windowRange(w)}</td>
+          <td style="${tdNum}">${w.totals.nights}</td>
+          <td style="${tdNum}">${w.totals.occupiedVillas} / ${w.totals.villas}</td>
+          <td style="${tdNum};color:#c62828">${w.totals.compNights} (${pct(w.totals.compNights, w.totals.nights)}%)</td>
+          <td style="${tdNum}">${w.totals.paidNights}</td>
+        </tr>`).join('')}
+      </table>
+
+      <h3 style="margin:20px 0 8px;padding:8px 12px;background:#1565c0;color:#fff;border-radius:4px;font-size:17px">Nights per Villa</h3>
+      <table style="${tableStyle}">
+        <tr style="background:#e3f2fd">
+          <th style="${thStyle}">Villa</th>
+          ${windows.map(w => `<th style="${thStyle};text-align:right">${w.label}<br><span style="font-weight:normal;font-size:12px;color:#666">${windowRange(w)}</span></th>`).join('')}
+        </tr>
+        ${villaOrder.map(villa => {
+          const wide = byVilla[byVilla.length - 1].get(villa);
+          const empty = !wide || wide.nights === 0;
+          return `
+        <tr${empty ? ' style="background:#f1f8e9"' : ''}>
+          <td style="${tdStyle};white-space:nowrap">${formatVilla(villa) || villa}</td>
+          ${byVilla.map(m => `<td style="${tdNum}">${nightsCell(m.get(villa))}</td>`).join('')}
+        </tr>`;
+        }).join('')}
+        <tr style="background:#f9f9f9;font-weight:bold">
+          <td style="${tdStyle}">Total (${widest.totals.villas})</td>
+          ${windows.map(w => `<td style="${tdNum}">${w.totals.nights}</td>`).join('')}
+        </tr>
+      </table>
+
+      <h3 style="margin:20px 0 8px;padding:8px 12px;background:#6a1b9a;color:#fff;border-radius:4px;font-size:17px">Nights by Rate Code — ${widest.label}</h3>
+      <p style="color:#666;font-size:15px;margin:0 0 8px">The rate-plan mix behind the booked nights over the full window — comp plans vs. owner / friends &amp; family / market rates.</p>
+      <table style="${tableStyle}">
+        <tr style="background:#f3e5f5">
+          <th style="${thStyle}">Rate code</th>
+          <th style="${thStyle};text-align:right">Nights</th>
+          <th style="${thStyle};text-align:right">Comp</th>
+          <th style="${thStyle};text-align:right">Paid</th>
+        </tr>
+        ${widest.rateCodes.map(rc => `
+        <tr>
+          <td style="${tdStyle};white-space:nowrap">${rc.code}</td>
+          <td style="${tdNum}">${rc.nights}</td>
+          <td style="${tdNum}">${rc.compNights > 0 ? `<span style="color:#c62828">${rc.compNights}</span>` : '0'}</td>
+          <td style="${tdNum}">${rc.paidNights}</td>
+        </tr>`).join('')}
+      </table>
+
+      <p style="color:#999;font-size:13px;margin-top:24px;border-top:1px solid #eee;padding-top:8px">
+        Counts are villa-nights already on the books (reserved or in-house; cancellations, no-shows and waitlist excluded), including nights already hosted since the 1st of this month. (Nc) = N comp nights (OPERA rate 0). PM and 9000-series charge accounts are excluded.<br>
+        Generated by OPERA Sync at ${new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })}.
+      </p>
+      </div>`;
+
+    // ── CSV attachment (per-villa × per-window) ──
+    const csvEscape = (val) => {
+      const s = String(val == null ? '' : val);
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ['Villa', 'OperaRoom'];
+    for (const w of windows) header.push(`Nights (${w.label})`, `Comp (${w.label})`, `Paid (${w.label})`);
+    const csvRows = [header.map(csvEscape).join(',')];
+    for (const villa of villaOrder) {
+      const cells = [formatVilla(villa) || villa, villa];
+      for (const m of byVilla) {
+        const v = m.get(villa);
+        cells.push(v ? v.nights : 0, v ? v.compNights : 0, v ? v.paidNights : 0);
+      }
+      csvRows.push(cells.map(csvEscape).join(','));
+    }
+    const attachments = [{
+      filename: `villa-rotation-outlook-${widest.startDate}.csv`,
+      content: csvRows.join('\n'),
+      contentType: 'text/csv'
+    }];
+
+    const sent = await this._sendEmailToRecipients(to, subject, textBody, htmlBody, attachments, cc);
+    logger.info(`Villa rotation outlook sent to ${to}${cc ? ` (cc ${cc})` : ''}: ${windows.map(w => `${w.label}=${w.totals.nights}n`).join(', ')}`);
+    return sent;
+  }
+
+  /**
    * Build CSV string for needs-review records (ready for SF Data Loader)
    * @param {Array} reviewDetails - Array of needsReview objects
    * @returns {string} CSV content

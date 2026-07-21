@@ -237,14 +237,35 @@ function isReportWeek() {
 }
 
 /**
- * Setup the bi-weekly villa-nights report. Fires weekly on the configured day,
- * but only sends every other week (see isReportWeek) so the effective cadence is
- * 14 days. Each run covers the prior 14 nights.
+ * The three forward windows the sales team plans villa assignments with
+ * (requested by Josefina, Jul 2026): current month + next, 3 months, 6 months.
+ * All anchor at the first of the current month so the counts include nights
+ * already hosted this month — that's part of the balance picture. Ends are
+ * exclusive firsts-of-month; Date.UTC handles month overflow across year ends.
+ * @param {string} todayStr - YYYY-MM-DD in the report timezone
+ * @returns {Array} [{ key, label, startDate, endDate }]
+ */
+function computeOutlookWindows(todayStr) {
+  const [y, m] = todayStr.split('-').map(Number); // m is 1-based
+  const first = (monthsAhead) => new Date(Date.UTC(y, m - 1 + monthsAhead, 1)).toISOString().slice(0, 10);
+  const startDate = first(0);
+  return [
+    { key: 'twoMonth', label: 'This month + next', startDate, endDate: first(2) },
+    { key: 'threeMonth', label: '3 months', startDate, endDate: first(3) },
+    { key: 'sixMonth', label: '6 months', startDate, endDate: first(6) }
+  ];
+}
+
+/**
+ * Setup the weekly villa-rotation outlook report. Fires weekly on the
+ * configured day and sends the forward-looking multi-horizon report (current
+ * month + next / 3 months / 6 months). Set VILLA_REPORT_CADENCE=biweekly to
+ * send every other week instead (epoch-stable, see isReportWeek).
  * @param {Notifier} notifier
- * @param {Function} queryFn - async (startDate, endDate) => reportData
+ * @param {Function} queryOutlookFn - async (windows) => outlook reportData
  * @returns {Object|null} Scheduled job or null
  */
-function setupVillaNightsReport(notifier, queryFn) {
+function setupVillaNightsReport(notifier, queryOutlookFn) {
   const enabled = process.env.ENABLE_VILLA_REPORT !== 'false';
   const to = process.env.VILLA_REPORT_EMAIL_TO;
 
@@ -257,6 +278,7 @@ function setupVillaNightsReport(notifier, queryFn) {
 
   const timezone = process.env.DAILY_SUMMARY_TIMEZONE || 'America/Argentina/Buenos_Aires';
   const dayOfWeek = parseInt(process.env.VILLA_REPORT_DOW ?? '1', 10); // 1 = Monday
+  const cadence = (process.env.VILLA_REPORT_CADENCE || 'weekly').toLowerCase();
   const [hour, minute] = (process.env.VILLA_REPORT_TIME || '8:00').split(':').map(Number);
   if (isNaN(hour) || isNaN(minute)) {
     logger.error(`Invalid VILLA_REPORT_TIME format: ${process.env.VILLA_REPORT_TIME}. Expected "HH:MM"`);
@@ -270,38 +292,47 @@ function setupVillaNightsReport(notifier, queryFn) {
   rule.tz = timezone;
 
   const job = schedule.scheduleJob(rule, async () => {
-    if (!isReportWeek()) {
+    if (cadence === 'biweekly' && !isReportWeek()) {
       logger.info('Villa nights report: off-week, skipping (bi-weekly cadence)');
       return;
     }
-    logger.info('Running scheduled villa nights report');
+    logger.info('Running scheduled villa rotation outlook report');
     try {
-      const endDate = argTodayStr(timezone);          // exclusive — excludes the in-progress night
-      const startDate = shiftDateStr(endDate, -14);   // prior 14 nights
-      const reportData = await queryFn(startDate, endDate);
-      await notifier.sendVillaNightsReport(reportData);
+      const windows = computeOutlookWindows(argTodayStr(timezone));
+      const reportData = await queryOutlookFn(windows);
+      await notifier.sendVillaNightsOutlook(reportData);
     } catch (err) {
-      logger.error('Error sending villa nights report:', err.message);
+      logger.error('Error sending villa rotation outlook report:', err.message);
       if (err.stack) logger.error(err.stack);
     }
   });
 
-  logger.info(`Villa nights report scheduled bi-weekly (day ${dayOfWeek}, ${hour}:${String(minute).padStart(2, '0')} ${timezone}) → ${to}`);
+  logger.info(`Villa rotation outlook report scheduled ${cadence} (day ${dayOfWeek}, ${hour}:${String(minute).padStart(2, '0')} ${timezone}) → ${to}`);
   return job;
 }
 
 /**
  * Manually run the villa-nights report (for the standalone script / testing).
+ * With opts.outlook, sends the forward-looking multi-horizon report; otherwise
+ * the historical single-window report (prior 14 nights by default).
  * @param {Notifier} notifier
- * @param {Function} queryFn - async (startDate, endDate) => reportData
- * @param {Object} [opts] - { to, startDate, endDate, days, timezone }
+ * @param {Object} queryFns - { queryWindow: async (startDate, endDate), queryOutlook: async (windows) }
+ * @param {Object} [opts] - { to, cc, outlook, asOf, startDate, endDate, days, timezone }
  */
-async function triggerVillaNightsReport(notifier, queryFn, opts = {}) {
+async function triggerVillaNightsReport(notifier, queryFns, opts = {}) {
   const timezone = opts.timezone || process.env.DAILY_SUMMARY_TIMEZONE || 'America/Argentina/Buenos_Aires';
+
+  if (opts.outlook) {
+    const windows = computeOutlookWindows(opts.asOf || argTodayStr(timezone));
+    logger.info(`Manually running villa rotation outlook ${windows[0].startDate}..${windows[windows.length - 1].endDate}`);
+    const reportData = await queryFns.queryOutlook(windows);
+    return notifier.sendVillaNightsOutlook(reportData, opts.to, opts.cc);
+  }
+
   const endDate = opts.endDate || argTodayStr(timezone);
   const startDate = opts.startDate || shiftDateStr(endDate, -(opts.days || 14));
   logger.info(`Manually running villa nights report ${startDate}..${endDate}`);
-  const reportData = await queryFn(startDate, endDate);
+  const reportData = await queryFns.queryWindow(startDate, endDate);
   return notifier.sendVillaNightsReport(reportData, opts.to, opts.cc);
 }
 
@@ -310,6 +341,7 @@ module.exports = {
   setupFrontDeskReport,
   setupVillaMapRefresh,
   setupVillaNightsReport,
+  computeOutlookWindows,
   triggerDailySummary,
   triggerVillaNightsReport
 };
