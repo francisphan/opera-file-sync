@@ -1276,32 +1276,23 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
 }
 
 /**
- * Aggregate villa occupancy for a date window: nights per villa, split into
- * comp (rate 0) vs paid, plus a per-rate-code breakdown.
+ * Fetch villa occupancy rows for a date window at (ROOM, night) grain.
  *
- * Grain: one row per (ROOM, night). The DB join from RESERVATION_DAILY_ELEMENTS
- * (room side, carries RATE_AMOUNT) to RESERVATION_DAILY_ELEMENT_NAME (guest side,
- * carries RATE_CODE) fans out per guest on a shared reservation, so we collapse
- * back to (ROOM, RESERVATION_DATE) with GROUP BY — a villa hosts one reservation
- * per night, so this is true occupancy, not guest-nights.
+ * The DB join from RESERVATION_DAILY_ELEMENTS (room side, carries RATE_AMOUNT)
+ * to RESERVATION_DAILY_ELEMENT_NAME (guest side, carries RATE_CODE) fans out
+ * per guest on a shared reservation, so we collapse back to
+ * (ROOM, RESERVATION_DATE) with GROUP BY — a villa hosts one reservation per
+ * night, so this is true occupancy, not guest-nights.
  *
- * Comp vs paid is read straight from RATE_AMOUNT (0 = comp). OPERA's dedicated
- * discount/comp columns are unused at VINES (verified empty across the whole
- * dataset), and there is no stored rack rate, so "discounted-but-paid" is left to
- * the rate-code table rather than computed.
+ * Works for past and future windows alike: OPERA creates daily elements at
+ * booking time, so nights of RESERVED stays months out are present. WAITLIST
+ * and PROSPECT bookings are excluded — they hold no villa (a past one that
+ * materialized would carry a CHECKED OUT status instead).
  *
- * Output is restricted to the mapped villa set (villaMap.knownVillas) — this is
- * an allowlist, so residences (100-series), Posting Masters, and legacy/old room
- * numbers are excluded — and every mapped villa gets a row, so a vacant villa
- * surfaces as 0 nights (the signal that matters for distributing guests).
- *
- * @param {OracleClient} oracleClient
- * @param {string} startDate - inclusive YYYY-MM-DD
- * @param {string} endDate   - exclusive YYYY-MM-DD
- * @returns {Promise<Object>} { startDate, endDate, villas, rateCodes, totals }
+ * @returns {Promise<Array>} rows of { ROOM, NIGHT, RATE_AMOUNT, RATE_CODE }
  */
-async function queryVillaNightsReport(oracleClient, startDate, endDate) {
-  const rows = await oracleClient.query(`
+async function fetchVillaNightRows(oracleClient, startDate, endDate) {
+  return oracleClient.query(`
     SELECT de.ROOM,
            TO_CHAR(de.RESERVATION_DATE, 'YYYY-MM-DD') AS NIGHT,
            MAX(de.RATE_AMOUNT) AS RATE_AMOUNT,
@@ -1316,7 +1307,7 @@ async function queryVillaNightsReport(oracleClient, startDate, endDate) {
     WHERE de.RESORT = 'VINES'
       AND de.RESERVATION_DATE >= TO_DATE(:startDate, 'YYYY-MM-DD')
       AND de.RESERVATION_DATE <  TO_DATE(:endDate, 'YYYY-MM-DD')
-      AND rn.RESV_STATUS NOT IN ('CANCELLED', 'NO SHOW')
+      AND rn.RESV_STATUS NOT IN ('CANCELLED', 'NO SHOW', 'WAITLIST', 'PROSPECT')
       -- A reservation's real nights are [check-in, check-out); this drops the
       -- spurious checkout-day daily element a departing guest can leave behind,
       -- so a turnover night attributes to the arriving guest, not the departing.
@@ -1324,9 +1315,27 @@ async function queryVillaNightsReport(oracleClient, startDate, endDate) {
       AND de.RESERVATION_DATE <  TRUNC(rn.END_DATE)
     GROUP BY de.ROOM, de.RESERVATION_DATE
   `, { startDate, endDate });
+}
 
-  // Canonical villa set — only the mapped villas count, and every one gets a row.
-  const known = villaMap.knownVillas();
+/**
+ * Aggregate (ROOM, night) rows into nights per villa, split into comp (rate 0)
+ * vs paid, plus a per-rate-code breakdown. Pure — no DB access.
+ *
+ * Comp vs paid is read straight from RATE_AMOUNT (0 = comp). OPERA's dedicated
+ * discount/comp columns are unused at VINES (verified empty across the whole
+ * dataset), and there is no stored rack rate, so "discounted-but-paid" is left to
+ * the rate-code table rather than computed.
+ *
+ * Output is restricted to the mapped villa set (`known`) — this is an
+ * allowlist, so residences (100-series), Posting Masters, and legacy/old room
+ * numbers are excluded — and every mapped villa gets a row, so a vacant villa
+ * surfaces as 0 nights (the signal that matters for distributing guests).
+ *
+ * @param {Array} rows - { ROOM, NIGHT, RATE_AMOUNT, RATE_CODE } rows
+ * @param {string[]} known - canonical villa allowlist (villaMap.knownVillas())
+ * @returns {Object} { villas, rateCodes, totals }
+ */
+function aggregateVillaNights(rows, known) {
   const knownSet = new Set(known);
 
   const occupied = new Map();    // normalized room -> { nights, compNights, paidNights, rateCodes:Map }
@@ -1384,15 +1393,56 @@ async function queryVillaNightsReport(oracleClient, startDate, endDate) {
 
   const rateCodeList = [...rateCodes.values()].sort((a, b) => b.nights - a.nights);
 
-  logger.info(`Villa nights report ${startDate}..${endDate}: ${occupied.size}/${villaList.length} villas occupied, ${totalNights} nights (${compNights} comp, ${paidNights} paid)`);
-
   return {
-    startDate,
-    endDate,
     villas: villaList,
     rateCodes: rateCodeList,
     totals: { villas: villaList.length, occupiedVillas: occupied.size, nights: totalNights, compNights, paidNights }
   };
+}
+
+/**
+ * Villa occupancy report for a single date window.
+ *
+ * @param {OracleClient} oracleClient
+ * @param {string} startDate - inclusive YYYY-MM-DD
+ * @param {string} endDate   - exclusive YYYY-MM-DD
+ * @returns {Promise<Object>} { startDate, endDate, villas, rateCodes, totals }
+ */
+async function queryVillaNightsReport(oracleClient, startDate, endDate) {
+  const rows = await fetchVillaNightRows(oracleClient, startDate, endDate);
+  const agg = aggregateVillaNights(rows, villaMap.knownVillas());
+
+  logger.info(`Villa nights report ${startDate}..${endDate}: ${agg.totals.occupiedVillas}/${agg.totals.villas} villas occupied, ${agg.totals.nights} nights (${agg.totals.compNights} comp, ${agg.totals.paidNights} paid)`);
+
+  return { startDate, endDate, ...agg };
+}
+
+/**
+ * Villa occupancy across several date windows (the weekly rotation outlook:
+ * current month + next / 3 months / 6 months). One fetch over the widest span,
+ * then each window aggregates the rows whose night falls inside it — windows
+ * may nest or overlap freely.
+ *
+ * @param {OracleClient} oracleClient
+ * @param {Array} windows - [{ key, label, startDate, endDate }] (endDate exclusive)
+ * @returns {Promise<Object>} { windows: [{ key, label, startDate, endDate, villas, rateCodes, totals }] }
+ */
+async function queryVillaNightsOutlook(oracleClient, windows) {
+  if (!windows || !windows.length) throw new Error('queryVillaNightsOutlook: no windows given');
+
+  const spanStart = windows.map(w => w.startDate).sort()[0];
+  const spanEnd = windows.map(w => w.endDate).sort().pop();
+  const rows = await fetchVillaNightRows(oracleClient, spanStart, spanEnd);
+  const known = villaMap.knownVillas();
+
+  const result = windows.map(w => {
+    const inWindow = rows.filter(r => r.NIGHT >= w.startDate && r.NIGHT < w.endDate);
+    const agg = aggregateVillaNights(inWindow, known);
+    logger.info(`Villa outlook ${w.label} (${w.startDate}..${w.endDate}): ${agg.totals.occupiedVillas}/${agg.totals.villas} villas with nights, ${agg.totals.nights} nights (${agg.totals.compNights} comp)`);
+    return { key: w.key, label: w.label, startDate: w.startDate, endDate: w.endDate, ...agg };
+  });
+
+  return { windows: result };
 }
 
 module.exports = {
@@ -1400,6 +1450,8 @@ module.exports = {
   queryGuestsSince,
   queryFrontDeskReport,
   queryVillaNightsReport,
+  queryVillaNightsOutlook,
+  aggregateVillaNights,
   discoverReservationColumns,
   discoverNoteCodes,
   discoverGuestFieldShapes,

@@ -4,11 +4,14 @@
  * Villa Nights Report — standalone runner
  *
  * Emails the nights-per-villa report (comp vs paid + rate-code breakdown) for a
- * date window. Used for the bi-weekly schedule's manual/ad-hoc sends; the
- * recurring job lives in src/scheduler.js (setupVillaNightsReport).
+ * date window, or the forward-looking rotation outlook (--outlook). Used for
+ * manual/ad-hoc sends; the recurring weekly job lives in src/scheduler.js
+ * (setupVillaNightsReport) and sends the outlook variant.
  *
  * Usage:
  *   node scripts/villa-nights-report.js                         # prior 14 nights → VILLA_REPORT_EMAIL_TO
+ *   node scripts/villa-nights-report.js --outlook               # this month + next / 3 mo / 6 mo
+ *   node scripts/villa-nights-report.js --outlook --asof 2026-08-01   # outlook anchored to another month
  *   node scripts/villa-nights-report.js --to a@b.com            # override recipient
  *   node scripts/villa-nights-report.js --to a@b.com --cc c@d.com   # add CC (comma-separated for multiple)
  *   node scripts/villa-nights-report.js --days 30               # prior N nights
@@ -23,7 +26,7 @@ const OracleClient = require('../src/oracle-client');
 const Notifier = require('../src/notifier');
 const logger = require('../src/logger');
 const villaMap = require('../src/villa-map');
-const { queryVillaNightsReport } = require('../src/opera-db-query');
+const { queryVillaNightsReport, queryVillaNightsOutlook } = require('../src/opera-db-query');
 const { triggerVillaNightsReport } = require('../src/scheduler');
 
 function parseArgs(argv) {
@@ -35,6 +38,8 @@ function parseArgs(argv) {
     else if (a === '--days') opts.days = parseInt(argv[++i], 10);
     else if (a === '--start') opts.startDate = argv[++i];
     else if (a === '--end') opts.endDate = argv[++i];
+    else if (a === '--outlook') opts.outlook = true;
+    else if (a === '--asof') opts.asOf = argv[++i];
   }
   return opts;
 }
@@ -69,7 +74,10 @@ async function main() {
     await oracleClient.connect();
     const sent = await triggerVillaNightsReport(
       notifier,
-      (startDate, endDate) => queryVillaNightsReport(oracleClient, startDate, endDate),
+      {
+        queryWindow: (startDate, endDate) => queryVillaNightsReport(oracleClient, startDate, endDate),
+        queryOutlook: (windows) => queryVillaNightsOutlook(oracleClient, windows)
+      },
       opts
     );
     if (sent) {
