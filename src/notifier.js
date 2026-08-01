@@ -574,7 +574,7 @@ class Notifier {
         <h3 style="margin:14px 0 6px;padding:6px 10px;background:#9e9e9e;color:#fff;border-radius:4px;font-size:13px">
           Posting Masters — ${postingMasters.length} (charge accounts, not real stays)
         </h3>
-        <p style="color:#666;font-size:12px;margin:0 0 8px">These are 9000-series accounts used to track charges. No email collection needed.</p>
+        <p style="color:#666;font-size:12px;margin:0 0 8px">These are Posting Master accounts (9000-series / PM room category) used to track charges. No email collection needed.</p>
         <table style="${tableStyle}">
           <thead>
           <tr>
