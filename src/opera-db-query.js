@@ -28,6 +28,17 @@ function isPostingMasterVilla(villa) {
   return /^9\d{3}$/.test(String(villa).trim());
 }
 
+// A reservation can also sit on a Posting Master with NO room number at all
+// (e.g. group members parked on a PM block before rooming) — there the pseudo
+// room CATEGORY ("PM") is the only tell. Exact match against the excluded
+// prefixes: categories are codes, not numbered rooms like "PM01".
+function isPostingMasterStay(villa, roomCategory) {
+  if (isPostingMasterVilla(villa)) return true;
+  if (villa && EXCLUDED_ROOM_PREFIXES.some(p => String(villa).trim().toUpperCase().startsWith(p))) return true;
+  if (roomCategory && EXCLUDED_ROOM_PREFIXES.includes(String(roomCategory).trim().toUpperCase())) return true;
+  return false;
+}
+
 /**
  * Format a JS Date as YYYY-MM-DD for Salesforce
  */
@@ -959,6 +970,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
            TO_CHAR(TRUNC(rn.BEGIN_DATE), 'YYYY-MM-DD') AS CHECK_IN,
            TO_CHAR(TRUNC(rn.END_DATE), 'YYYY-MM-DD') AS CHECK_OUT,
            daily.ROOM,
+           daily.ROOM_CATEGORY,
            daily.ADULTS,
            daily.CHILDREN,
            rn.RESV_NAME_ID,
@@ -987,7 +999,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     LEFT JOIN OPERA.NAME_ADDRESS a ON n.NAME_ID = a.NAME_ID
       AND a.PRIMARY_YN = 'Y' AND a.INACTIVE_DATE IS NULL
     LEFT JOIN (
-      SELECT rden.RESV_NAME_ID, rde.ROOM, rden.ADULTS, rden.CHILDREN,
+      SELECT rden.RESV_NAME_ID, rde.ROOM, rde.ROOM_CATEGORY, rden.ADULTS, rden.CHILDREN,
              ROW_NUMBER() OVER (PARTITION BY rden.RESV_NAME_ID ORDER BY rden.RESERVATION_DATE) AS rn
       FROM OPERA.RESERVATION_DAILY_ELEMENT_NAME rden
       JOIN OPERA.RESERVATION_DAILY_ELEMENTS rde
@@ -1013,13 +1025,16 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   // Best-effort DOB / phone / passport presence for the data-quality report.
   const completeness = await fetchGuestCompleteness(oracleClient, nameIds);
 
-  // Room by reservation — used so companions parked on a parent reservation
-  // (e.g. a group leader / house account sitting on a Posting Master) can
-  // inherit the parent's room when they have none of their own.
+  // Room (and room category) by reservation — used so companions parked on a
+  // parent reservation (e.g. a group leader / house account sitting on a
+  // Posting Master) can inherit the parent's room when they have none of their own.
   const roomByResvId = new Map();
+  const categoryByResvId = new Map();
   for (const r of rows) {
     const rm = (r.ROOM || '').trim() || null;
     if (rm && !roomByResvId.has(r.RESV_NAME_ID)) roomByResvId.set(r.RESV_NAME_ID, rm);
+    const rc = (r.ROOM_CATEGORY || '').trim() || null;
+    if (rc && !categoryByResvId.has(r.RESV_NAME_ID)) categoryByResvId.set(r.RESV_NAME_ID, rc);
   }
 
   // Build guest objects, group shared reservations, then categorize
@@ -1061,6 +1076,12 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     const parentVilla = row.PARENT_RESV_NAME_ID ? (roomByResvId.get(row.PARENT_RESV_NAME_ID) || null) : null;
     const villa = ownVilla || parentVilla;
 
+    // Room category rides along the same way — a roomless reservation on the
+    // PM pseudo category is a Posting Master even without a room number.
+    const ownCategory = (row.ROOM_CATEGORY || '').trim() || null;
+    const parentCategory = row.PARENT_RESV_NAME_ID ? (categoryByResvId.get(row.PARENT_RESV_NAME_ID) || null) : null;
+    const roomCategory = ownCategory || parentCategory;
+
     const checkInDate = row.CHECK_IN || '';
     const checkOutDate = row.CHECK_OUT || '';
     const resvNameId = row.RESV_NAME_ID;
@@ -1084,6 +1105,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       country: expandCountry(row.COUNTRY),
       language: mapLanguageToSalesforce(row.LANGUAGE),
       villa,
+      roomCategory,
       adults: adults || 0,
       children: children || 0,
       prs: adults != null ? `${adults}/${children || 0}` : null,
@@ -1173,6 +1195,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   const cleanupGuest = (g) => {
     delete g.nameId; delete g.resvNameId; delete g.parentId;
     delete g.companions; delete g.notesRaw; delete g.cashierRaw;
+    delete g.roomCategory;
   };
 
   // Categorize primary guests into sections (and collect data-quality gaps).
@@ -1199,9 +1222,11 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       : guest.notesRaw;
     guest.notes = tidyNotes(combinedNotes);
 
-    // Posting Masters (9000-series villas) are charge-tracking accounts, not
-    // real stays — surface separately, skip data-quality / regular sections.
-    if (isPostingMasterVilla(guest.villa)) {
+    // Posting Masters — 9000-series villas, PM-prefixed rooms inherited from a
+    // parent reservation, or roomless reservations on the PM pseudo room
+    // category — are charge-tracking accounts, not real stays. Surface
+    // separately, skip data-quality / regular sections.
+    if (isPostingMasterStay(guest.villa, guest.roomCategory)) {
       cleanupGuest(guest);
       postingMasters.push(guest);
       continue;

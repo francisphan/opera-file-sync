@@ -108,3 +108,40 @@ test('posting-master villas skip dataQuality entirely', async () => {
   assert.equal(report.dataQuality.length, 0);
   assert.equal(report.postingMasters.length, 1);
 });
+
+test('roomless reservation on the PM pseudo category goes to postingMasters, not dataQuality', async () => {
+  const report = await queryFrontDeskReport(
+    mockClient([row({ LAST: 'Parked', ROOM: null, ROOM_CATEGORY: 'PM', EMAIL: '', CHECK_IN: DATE })]),
+    DATE
+  );
+  assert.equal(report.dataQuality.length, 0);
+  assert.equal(report.arrivalsToday.length, 0);
+  assert.equal(report.postingMasters.length, 1);
+  assert.equal(report.postingMasters[0].lastName, 'Parked');
+});
+
+test('roomless reservation with a real room category is still flagged', async () => {
+  const report = await queryFrontDeskReport(
+    mockClient([row({ LAST: 'Unroomed', ROOM: null, ROOM_CATEGORY: 'DVIL', EMAIL: '', CHECK_IN: DATE })]),
+    DATE
+  );
+  assert.equal(report.postingMasters.length, 0);
+  const entry = dqEntry(report, 'Unroomed');
+  assert.ok(entry, 'expected roomless real guest in dataQuality');
+  assert.equal(entry.section, 'Arrivals Today');
+});
+
+test('guest inheriting a PM-prefixed room from a skipped parent is diverted to postingMasters', async () => {
+  const parent = row({ FIRST: 'PM', LAST: 'GROUP', ROOM: 'PM01', EMAIL: '' });
+  const child = row({
+    LAST: 'OnMaster', ROOM: null, ROOM_CATEGORY: null, EMAIL: '',
+    PARENT_RESV_NAME_ID: parent.RESV_NAME_ID, CHECK_IN: DATE,
+  });
+  const report = await queryFrontDeskReport(mockClient([parent, child]), DATE);
+  // Parent ("PM GROUP" on room PM01) is dropped as a house account / PM room;
+  // the child must not surface in Arrivals with the inherited PM01 room.
+  assert.equal(report.dataQuality.length, 0);
+  assert.equal(report.arrivalsToday.length, 0);
+  assert.equal(report.postingMasters.length, 1);
+  assert.equal(report.postingMasters[0].lastName, 'OnMaster');
+});
