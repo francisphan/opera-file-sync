@@ -8,7 +8,7 @@
 
 const logger = require('./logger');
 const villaMap = require('./villa-map');
-const { sanitizeEmail, emailInvalidReason, isAgentEmail, isRoleMailbox, mapLanguageToSalesforce, verifyEmailsSMTP, parseExcludedGuestNames, isExcludedGuest } = require('./guest-utils');
+const { sanitizeEmail, emailInvalidReason, isAgentEmail, isRoleMailbox, mapLanguageToSalesforce, verifyEmailsSMTP, parseExcludedGuestNames, isExcludedGuest, parseConfirmedEmails, findEmailInText, OTA_PROXY_DOMAINS } = require('./guest-utils');
 const { expandCountry } = require('./country-names');
 
 // Internal/excluded email domains and addresses — these are skipped during sync
@@ -958,6 +958,13 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   // report sections.
   const excludedGuests = parseExcludedGuestNames(process.env.FRONT_DESK_EXCLUDE_GUESTS);
 
+  // Addresses front desk has already verified against the guest at check-in.
+  // Re-flagging these every morning just makes the report easier to ignore,
+  // so they skip all email checks (including the SMTP probe). Suppressions are
+  // logged so a stale entry never hides an address invisibly.
+  const confirmedEmails = parseConfirmedEmails(process.env.FRONT_DESK_CONFIRMED_EMAILS);
+  const confirmedSuppressed = [];
+
   // Oracle returns dates as YYYY-MM-DD strings via TO_CHAR — no JS Date timezone issues
   // Join through RESERVATION_DAILY_ELEMENT_NAME → RESERVATION_DAILY_ELEMENTS to get Room + Adults/Children
   // Notes are fetched separately below from NAME_COMMENT, NAME$NOTES, RESERVATION_COMMENT,
@@ -980,17 +987,23 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     JOIN OPERA.NAME n ON rn.NAME_ID = n.NAME_ID
       AND n.NAME_TYPE = 'D'
     LEFT JOIN (
-      -- Best email per guest: primary EMAIL row first, then any EMAIL row,
-      -- then any phone row holding an address (front desk sometimes types the
-      -- email under a phone type like HOME — it must not read as "no email").
+      -- Best email per guest, tiered: real EMAIL rows first (primary, then
+      -- any), then a plausible address typed under a phone type like HOME
+      -- (must not read as "no email"), then OTA proxy relays (a Booking.com
+      -- relay marked primary must not shadow the real address the guest gave
+      -- at check-in; domains interpolated from OTA_PROXY_DOMAINS), and junk
+      -- '@'-bearing phone rows dead last so they can't shadow the relay.
       SELECT NAME_ID, PHONE_NUMBER,
              ROW_NUMBER() OVER (
                PARTITION BY NAME_ID
                ORDER BY CASE
+                          WHEN ${Object.keys(OTA_PROXY_DOMAINS).map((d) => `LOWER(PHONE_NUMBER) LIKE '%${d}%'`).join('\n                            OR ')} THEN 3
                           WHEN PHONE_ROLE = 'EMAIL' AND PRIMARY_YN = 'Y' THEN 0
                           WHEN PHONE_ROLE = 'EMAIL' THEN 1
-                          ELSE 2
+                          WHEN PHONE_NUMBER LIKE '%@%.%' AND PHONE_NUMBER NOT LIKE '% %' THEN 2
+                          ELSE 4
                         END,
+                        CASE WHEN PRIMARY_YN = 'Y' THEN 0 ELSE 1 END,
                         UPDATE_DATE DESC NULLS LAST, INSERT_DATE DESC NULLS LAST
              ) AS RNK
       FROM OPERA.NAME_PHONE
@@ -1128,17 +1141,31 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       companions: []
     };
 
-    // Check for bad/agent email
+    // Check for bad/agent email. Confirmation matches the RAW address so front
+    // desk can also confirm values sanitizeEmail rejects (odd TLDs, etc.) —
+    // those are exactly the ones that otherwise re-flag every morning. A
+    // "lastname:email" entry additionally pins the guest, so a stale entry
+    // can't go green for someone else after an OPERA profile merge.
     const cleanedEmail = sanitizeEmail(rawEmail);
+    const confirmedScope = confirmedEmails.get(emailLower);
+    const emailConfirmed = confirmedEmails.has(emailLower) &&
+      (confirmedScope === null || confirmedScope === lastName.toLowerCase());
+    if (emailConfirmed) confirmedSuppressed.push(`${firstName} ${lastName} <${rawEmail}>`);
     let badReason = null;
-    if (!cleanedEmail) {
+    if (emailConfirmed) {
+      // Front desk verified this address with the guest — leave it alone.
+    } else if (!cleanedEmail) {
       badReason = emailInvalidReason(rawEmail) || 'invalid-email';
     } else {
-      const agentCat = isAgentEmail({ email: cleanedEmail, firstName });
+      // Passing lastName lets isAgentEmail accept the guest's own
+      // corporate-domain mailbox (front-desk request, 2026-08-23); the SF
+      // sync path passes it too, so report and sync agree.
+      const agentCat = isAgentEmail({ email: cleanedEmail, firstName, lastName });
       if (agentCat) badReason = agentCat;
       else if (isRoleMailbox(cleanedEmail)) badReason = 'role-mailbox';
     }
     guest.reason = badReason || undefined;
+    guest.emailConfirmed = emailConfirmed || undefined;
 
     allGuests.push(guest);
   }
@@ -1172,7 +1199,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   // Skipped when SMTP_VERIFY=false. Fails open: network errors leave reason
   // untouched so the email still flows through normally.
   if (process.env.SMTP_VERIFY !== 'false') {
-    const eligible = primaryGuests.filter(g => !g.reason && g.email && sanitizeEmail(g.email));
+    const eligible = primaryGuests.filter(g => !g.reason && !g.emailConfirmed && g.email && sanitizeEmail(g.email));
     const emails = [...new Set(eligible.map(g => g.email.toLowerCase()))];
     if (emails.length > 0) {
       logger.info(`Front desk SMTP verify: probing ${emails.length} address(es)...`);
@@ -1195,7 +1222,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   const cleanupGuest = (g) => {
     delete g.nameId; delete g.resvNameId; delete g.parentId;
     delete g.companions; delete g.notesRaw; delete g.cashierRaw;
-    delete g.roomCategory;
+    delete g.roomCategory; delete g.emailConfirmed;
   };
 
   // Categorize primary guests into sections (and collect data-quality gaps).
@@ -1243,6 +1270,17 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     // display a value (the report's DOB column is left blank by design).
     const dob = null;
 
+    // Channel feeds (Synxis) write the booker's real address into reservation
+    // comments — when the profile email is missing/flagged, surface it so front
+    // desk doesn't have to dig through OPERA for it. 'missing-first-name' is
+    // about the NAME, not the email — a hint there would invite overwriting a
+    // perfectly good address.
+    let emailHint = null;
+    if (badReason && badReason !== 'missing-first-name') {
+      emailHint = findEmailInText([guest.notesRaw, guest.cashierRaw].filter(Boolean).join(' | '));
+      if (emailHint && emailHint.toLowerCase() === (guest.email || '').trim().toLowerCase()) emailHint = null;
+    }
+
     cleanupGuest(guest);
 
     let section = null;
@@ -1260,6 +1298,7 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
         villa: guest.villa,
         email: guest.email,
         reason: guest.reason || null,
+        emailHint,
         dob,
         checkIn: checkInDate,
         checkOut: checkOutDate,
@@ -1296,6 +1335,9 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
   };
 
   logger.info(`Front desk report: ${inHouse.length} in-house, ${departures.length} departures, ${arrivalsToday.length} arrivals today, ${arrivalsTomorrow.length} arrivals tomorrow, ${arrivalsDayAfter.length} arrivals day-after, ${postingMasters.length} posting masters, ${dataQuality.length} data-quality flags`);
+  if (confirmedSuppressed.length > 0) {
+    logger.info(`Front desk report: ${confirmedSuppressed.length} FRONT_DESK_CONFIRMED_EMAILS suppression(s): ${confirmedSuppressed.join('; ')}`);
+  }
 
   return report;
 }

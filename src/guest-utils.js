@@ -22,6 +22,15 @@ const AGENT_DOMAIN_KEYWORDS = [
   'centurioncard', 'vendor@'
 ];
 
+// OTA proxy relay domains → flag category. Single source of truth: also
+// interpolated into the best-email SQL ranking in opera-db-query.js and used
+// to screen hint candidates in findEmailInText — add new relay domains
+// (Airbnb, Agoda, …) HERE only.
+const OTA_PROXY_DOMAINS = {
+  'guest.booking.com': 'booking-proxy',
+  'expediapartnercentral.com': 'expedia-proxy',
+};
+
 const KNOWN_PROVIDERS = ['gmail', 'yahoo', 'hotmail', 'outlook', 'aol', 'icloud', 'mail'];
 
 const DISPOSABLE_DOMAINS = new Set([
@@ -250,24 +259,42 @@ function isAgentEmail(customer) {
   const email = (customer.email || '').toLowerCase();
   const firstName = (customer.firstName || '').trim();
 
-  if (email.indexOf('guest.booking.com') !== -1) return 'booking-proxy';
-  if (email.indexOf('expediapartnercentral.com') !== -1) return 'expedia-proxy';
+  for (const [domain, category] of Object.entries(OTA_PROXY_DOMAINS)) {
+    if (email.indexOf(domain) !== -1) return category;
+  }
 
   if (firstName === '' || firstName === '.' || firstName === 'TBC') return 'missing-first-name';
 
-  // Match keywords against domain part only to avoid false positives
-  // (e.g., 'preserv@gmail.com' should NOT match 'reserv')
-  // Keywords containing '@' (like 'vendor@') match the full email instead
-  const atIndex = email.indexOf('@');
-  const domain = atIndex !== -1 ? email.substring(atIndex + 1) : '';
-
-  for (const keyword of AGENT_DOMAIN_KEYWORDS) {
-    const kw = keyword.toLowerCase();
-    const target = kw.includes('@') ? email : domain;
-    if (target.indexOf(kw) !== -1) return 'agent-domain';
+  if (hasAgentDomainKeyword(email)) {
+    // A company-domain address carrying the guest's own last name is the
+    // guest's mailbox, not an agent's — pass lastName to opt in. This applies
+    // to BOTH the front-desk report and the SF sync path (such guests now
+    // sync instead of being silently dropped as agents); callers omitting
+    // lastName keep the strict behavior.
+    if (matchesGuestName(email, customer.lastName)) return null;
+    return 'agent-domain';
   }
 
   return null;
+}
+
+/**
+ * Returns true if the email's domain matches an AGENT_DOMAIN_KEYWORDS entry.
+ * Keywords match against the domain part only to avoid false positives
+ * (e.g., 'preserv@gmail.com' must NOT match 'reserv'); keywords containing
+ * '@' (like 'vendor@') match the full email instead.
+ */
+function hasAgentDomainKeyword(email) {
+  const lower = (email || '').toLowerCase();
+  const atIndex = lower.indexOf('@');
+  const domain = atIndex !== -1 ? lower.substring(atIndex + 1) : '';
+
+  for (const keyword of AGENT_DOMAIN_KEYWORDS) {
+    const kw = keyword.toLowerCase();
+    const target = kw.includes('@') ? lower : domain;
+    if (target.indexOf(kw) !== -1) return true;
+  }
+  return false;
 }
 
 /**
@@ -298,6 +325,102 @@ function isExcludedGuest(guest, excludedNames) {
   const key = `${guest.firstName || ''} ${guest.lastName || ''}`
     .trim().toLowerCase().replace(/\s+/g, ' ');
   return excludedNames.has(key);
+}
+
+/**
+ * True when the email's local part clearly carries the guest's own last name,
+ * so a corporate/company-domain address is treated as the guest's rather than
+ * a travel agent's (christian.cavanagh@bbva.com, danerim@bbva.com).
+ *
+ * Deliberately last-name-only: agents routinely book from first-name mailboxes
+ * (andrea@venicetravel...) that can coincide with a guest's first name, so a
+ * first-name match proves nothing. Accents are stripped before comparing and
+ * short name words (de, da, van) are ignored.
+ * @param {string} email - Sanitized email address
+ * @param {string} lastName - Guest's last name as it appears on the reservation
+ * @returns {boolean}
+ */
+function matchesGuestName(email, lastName) {
+  if (!email || !lastName || typeof email !== 'string') return false;
+  const at = email.indexOf('@');
+  if (at <= 0) return false;
+  const normalize = (s) => String(s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  const local = normalize(email.substring(0, at));
+  const localCompact = local.replace(/[^a-z]/g, '');
+  const tokens = local.split(/[^a-z]+/).filter(Boolean);
+  for (const word of normalize(lastName).split(/[^a-z]+/).filter(Boolean)) {
+    if (word.length >= 3 && tokens.includes(word)) return true;
+    // Substring match catches initial-suffixed forms (danerim, jbledel) but
+    // needs a longer word: 4-letter surnames common in this market hide
+    // inside unrelated locals ("Vera" in primavera@, "Rosa" in larosa@).
+    if (word.length >= 5 && localCompact.includes(word)) return true;
+  }
+  return false;
+}
+
+/**
+ * Parse FRONT_DESK_CONFIRMED_EMAILS — addresses front desk has verified
+ * against the guest at check-in. Matching guests skip all email flags and the
+ * SMTP probe in the missing-info report. An entry may be a bare address, or
+ * "lastname:address" to also require the guest's last name — scoping guards
+ * against a stale entry going green for a different guest years later (OPERA
+ * profile merges reattach addresses).
+ * @param {string} envValue - e.g. "guest@corp.com, diez:other@host.br"
+ * @returns {Map<string,string|null>} Lowercased address → required lowercased
+ *   last name, or null for an unscoped entry
+ */
+function parseConfirmedEmails(envValue) {
+  const map = new Map();
+  for (const raw of (envValue || '').split(',')) {
+    const entry = raw.trim().toLowerCase();
+    if (!entry.includes('@')) continue;
+    const colon = entry.indexOf(':');
+    if (colon > 0 && colon < entry.indexOf('@')) {
+      map.set(entry.slice(colon + 1).trim(), entry.slice(0, colon).trim());
+    } else {
+      map.set(entry, null);
+    }
+  }
+  return map;
+}
+
+/**
+ * Scan free-text notes/comments for a usable email address. Synxis and other
+ * channel feeds write the booker's real address into reservation comments, so
+ * when a guest's profile email is missing or flagged this can hand front desk
+ * a lead instead of a dead end. Proxy relays, role mailboxes, and the hotel's
+ * own domains never count.
+ * @param {string} text - Concatenated notes/comments
+ * @returns {string|null} First plausible address found, or null
+ */
+function findEmailInText(text) {
+  if (!text || typeof text !== 'string') return null;
+  const matches = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [];
+  for (const raw of matches) {
+    let candidate = raw.replace(/^[._%+-]+/, '');
+    // Free text runs sentences together ("jane@gmail.com.Thanks") and the
+    // greedy domain match swallows the next word. Real TLDs are lowercase, so
+    // peel capitalized trailing segments while the domain keeps 2+ labels.
+    const [local, domain] = candidate.split('@');
+    const labels = domain.split('.');
+    while (labels.length > 2 && !/^[a-z0-9]+$/.test(labels[labels.length - 1])) {
+      labels.pop();
+    }
+    candidate = `${local}@${labels.join('.')}`;
+    const cleaned = sanitizeEmail(candidate);
+    if (!cleaned) continue;
+    const lower = cleaned.toLowerCase();
+    if (Object.keys(OTA_PROXY_DOMAINS).some((d) => lower.includes(d))) continue;
+    if (isRoleMailbox(cleaned)) continue;
+    // Never suggest a travel-agency mailbox — swapping one agent address for
+    // another is the exact trap the agent-domain flag exists to prevent.
+    if (hasAgentDomainKeyword(lower)) continue;
+    if (lower.endsWith('@vinesofmendoza.com') || lower.endsWith('@vinesresortandspa.com')) continue;
+    return cleaned;
+  }
+  return null;
 }
 
 /**
@@ -577,6 +700,7 @@ async function verifyEmailsSMTP(emails) {
 
 module.exports = {
   AGENT_DOMAIN_KEYWORDS,
+  OTA_PROXY_DOMAINS,
   DISPOSABLE_DOMAINS,
   ROLE_MAILBOX_LOCAL_PARTS,
   sanitizeEmail,
@@ -587,6 +711,9 @@ module.exports = {
   isProviderTypo,
   parseExcludedGuestNames,
   isExcludedGuest,
+  matchesGuestName,
+  parseConfirmedEmails,
+  findEmailInText,
   transformToContact,
   transformToTVRSGuest,
   mapLanguageToSalesforce,

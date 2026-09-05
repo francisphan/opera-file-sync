@@ -707,6 +707,7 @@ class Notifier {
       const name = `${g.firstName} ${g.lastName}${g.companionNames ? ` (+${g.companionNames})` : ''}`;
       textLines.push(`  - ${name} | Villa ${formatVilla(g.villa) || '—'} | ${g.section} | ${g.checkIn}→${g.checkOut}`);
       textLines.push(`      Missing: ${missingDetail(g).join('; ')}`);
+      if (g.emailHint) textLines.push(`      Possible email in comments: ${g.emailHint}`);
     });
     const textBody = textLines.join('\n');
 
@@ -722,6 +723,7 @@ class Notifier {
       const name = `${g.firstName} ${g.lastName}` + (g.companionNames ? `<br><span style="font-size:11px;color:#666">+${g.companionNames}</span>` : '');
       const flags = (g.missing || []).map(chip).join(' ');
       const emailNote = (g.missing || []).includes('Email') ? `<br><span style="font-size:11px;color:#c62828">${this._describeEmailReason(g) || ''}</span>` : '';
+      const hintNote = g.emailHint ? `<br><span style="font-size:11px;color:#2e7d32">Possible email in comments: ${g.emailHint}</span>` : '';
       return `
         <tr>
           <td style="${tdStyle}">${name}</td>
@@ -730,7 +732,7 @@ class Notifier {
           <td style="${tdNowrap}">${g.checkIn}</td>
           <td style="${tdNowrap}">${g.checkOut}</td>
           <td style="${tdStyle}">${g.email || '—'}</td>
-          <td style="${tdStyle}">${flags}${emailNote}</td>
+          <td style="${tdStyle}">${flags}${emailNote}${hintNote}</td>
         </tr>`;
     }).join('');
 
@@ -759,7 +761,7 @@ class Notifier {
       const s = String(v || '');
       return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const csvRows = ['Name,Villa,Section,Check-in,Check-out,Email,DOB,Missing'];
+    const csvRows = ['Name,Villa,Section,Check-in,Check-out,Email,DOB,Missing,Possible Email (comments)'];
     for (const g of dataQuality) {
       csvRows.push([
         `${g.firstName} ${g.lastName}`,
@@ -770,6 +772,7 @@ class Notifier {
         g.email || '',
         g.dob || '',
         (g.missing || []).join(' / '),
+        g.emailHint || '',
       ].map(csvEscape).join(','));
     }
     const attachments = [{

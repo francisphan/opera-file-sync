@@ -17,6 +17,9 @@ const {
   isProviderTypo,
   parseExcludedGuestNames,
   isExcludedGuest,
+  matchesGuestName,
+  parseConfirmedEmails,
+  findEmailInText,
   mapLanguageToSalesforce,
   transformToContact,
   transformToTVRSGuest,
@@ -961,5 +964,142 @@ describe('parseExcludedGuestNames / isExcludedGuest', () => {
     const set = parseExcludedGuestNames('Brenda Carrion');
     assert.ok(!isExcludedGuest({ firstName: null, lastName: null }, set));
     assert.ok(!isExcludedGuest({}, set));
+  });
+});
+
+describe('matchesGuestName', () => {
+  test('last name as a token in the local part matches', () => {
+    assert.ok(matchesGuestName('christian.cavanagh@bbva.com', 'Cavanagh'));
+    assert.ok(matchesGuestName('pablo.jordan@bbva.com', 'Jordan'));
+    assert.ok(matchesGuestName('vbories@bbva.com', 'Bories'));
+  });
+
+  test('last name as a substring catches initial-suffixed locals', () => {
+    assert.ok(matchesGuestName('danerim@bbva.com', 'Daneri'));
+    assert.ok(matchesGuestName('jorgea.bledel@bbva.com', 'Bledel'));
+  });
+
+  test('accents and case are ignored', () => {
+    assert.ok(matchesGuestName('fossaluzza.junior@empresa.com.br', 'Fossaluzza Júnior'));
+    assert.ok(matchesGuestName('LIPUZCOA@bbva.com', 'Lipuzcoa'));
+  });
+
+  test('multi-word last names match on any word of 3+ letters', () => {
+    assert.ok(matchesGuestName('hermes.fonseca@corp.br', 'Novaes Hermes Da Fonseca'));
+    assert.ok(!matchesGuestName('daniela@corp.br', 'Da Silva')); // "da" too short, "silva" absent
+  });
+
+  test('first-name-only locals do NOT match (agents share first names)', () => {
+    assert.ok(!matchesGuestName('andrea@venicetravel.com.br', 'Mendes'));
+    assert.ok(!matchesGuestName('sergio@alchemydmc.com', 'Pizzagalli'));
+  });
+
+  test('short last names cannot hide inside unrelated locals', () => {
+    assert.ok(!matchesGuestName('kaleema@corp.com', 'Lee'));
+    assert.ok(matchesGuestName('lee.wong@corp.com', 'Lee')); // exact token still fine
+    // 4-letter surnames common in this market must not substring-match either.
+    assert.ok(!matchesGuestName('primavera@viajes.com', 'Vera'));
+    assert.ok(!matchesGuestName('larosa@travelco.com', 'Rosa'));
+    assert.ok(matchesGuestName('vera@corp.com', 'Vera')); // exact token still fine
+  });
+
+  test('null/empty inputs never match', () => {
+    assert.ok(!matchesGuestName(null, 'Doe'));
+    assert.ok(!matchesGuestName('jane@corp.com', ''));
+    assert.ok(!matchesGuestName('jane@corp.com', null));
+    assert.ok(!matchesGuestName('no-at-sign', 'Doe'));
+  });
+});
+
+describe('isAgentEmail name-match acceptance', () => {
+  test('agent-domain cleared when local part carries the guest last name', () => {
+    assert.equal(
+      isAgentEmail({ email: 'maria.gonzalez@petravel.com', firstName: 'Maria', lastName: 'Gonzalez' }),
+      null
+    );
+  });
+
+  test('still agent-domain when lastName is absent or does not match', () => {
+    assert.equal(
+      isAgentEmail({ email: 'maria.gonzalez@petravel.com', firstName: 'Maria' }),
+      'agent-domain'
+    );
+    assert.equal(
+      isAgentEmail({ email: 'andrea@venicetravel.com.br', firstName: 'Eduardo', lastName: 'Mendes' }),
+      'agent-domain'
+    );
+  });
+
+  test('booking proxies are never cleared by a name match', () => {
+    assert.equal(
+      isAgentEmail({ email: 'diez.123@guest.booking.com', firstName: 'Phil', lastName: 'Diez' }),
+      'booking-proxy'
+    );
+  });
+});
+
+describe('parseConfirmedEmails', () => {
+  test('parses comma-separated addresses, lowercased and trimmed', () => {
+    const map = parseConfirmedEmails(' Guest@Corp.COM , other@host.br ,, ');
+    assert.equal(map.size, 2);
+    assert.ok(map.has('guest@corp.com'));
+    assert.ok(map.has('other@host.br'));
+    assert.equal(map.get('guest@corp.com'), null); // unscoped
+  });
+
+  test('lastname:address entries carry the last-name scope', () => {
+    const map = parseConfirmedEmails('Diez:phil@gmail.com, plain@host.com');
+    assert.equal(map.get('phil@gmail.com'), 'diez');
+    assert.equal(map.get('plain@host.com'), null);
+  });
+
+  test('entries without @ are dropped; empty env yields empty set', () => {
+    assert.equal(parseConfirmedEmails('not-an-email, x').size, 0);
+    assert.equal(parseConfirmedEmails('').size, 0);
+    assert.equal(parseConfirmedEmails(undefined).size, 0);
+  });
+});
+
+describe('findEmailInText', () => {
+  test('finds a plain address inside free text', () => {
+    assert.equal(
+      findEmailInText('[RESERVATION] Synxis booking — contact brennen@properic.com for billing'),
+      'brennen@properic.com'
+    );
+  });
+
+  test('ignores booking/expedia proxies and keeps scanning', () => {
+    assert.equal(
+      findEmailInText('proxy epires.489298@guest.booking.com then real paulo@empresa.com.br'),
+      'paulo@empresa.com.br'
+    );
+  });
+
+  test('ignores role mailboxes and the hotel own domains', () => {
+    assert.equal(findEmailInText('reservations@vinesresortandspa.com'), null);
+    assert.equal(findEmailInText('write to info@agency.com'), null);
+    assert.equal(findEmailInText('cc camila.rosi@vinesofmendoza.com'), null);
+  });
+
+  test('mailto: prefixes and trailing punctuation do not leak in', () => {
+    assert.equal(findEmailInText('see mailto:jane@example.com.'), 'jane@example.com');
+  });
+
+  test('run-together sentence words after the address are peeled off', () => {
+    assert.equal(findEmailInText('contact jane@gmail.com.Thanks for booking'), 'jane@gmail.com');
+    assert.equal(findEmailInText('email jane@gmail.com.Regards'), 'jane@gmail.com');
+    // Real multi-label domains keep their lowercase country suffix.
+    assert.equal(findEmailInText('mail paulo@empresa.com.br today'), 'paulo@empresa.com.br');
+  });
+
+  test('travel-agency addresses are never suggested as hints', () => {
+    assert.equal(findEmailInText('agency: mariana@venicetravel.com.br'), null);
+    assert.equal(findEmailInText('via sergio@alchemydmc.com'), null);
+  });
+
+  test('returns null for empty or email-free text', () => {
+    assert.equal(findEmailInText(null), null);
+    assert.equal(findEmailInText(''), null);
+    assert.equal(findEmailInText('no address here'), null);
   });
 });
