@@ -195,6 +195,23 @@ test('FRONT_DESK_CONFIRMED_EMAILS also covers addresses sanitizeEmail rejects', 
   }
 });
 
+test('lastname-scoped confirmation only suppresses for that guest', async () => {
+  process.env.FRONT_DESK_CONFIRMED_EMAILS = 'right:shared.999@guest.booking.com';
+  try {
+    const report = await queryFrontDeskReport(
+      mockClient([
+        row({ LAST: 'Right', EMAIL: 'shared.999@guest.booking.com' }),
+        row({ LAST: 'Wrong', EMAIL: 'shared.999@guest.booking.com' }),
+      ]),
+      DATE
+    );
+    assert.ok(!dqEntry(report, 'Right').missing.includes('Email'));
+    assert.ok(dqEntry(report, 'Wrong').missing.includes('Email'));
+  } finally {
+    delete process.env.FRONT_DESK_CONFIRMED_EMAILS;
+  }
+});
+
 test('email found in reservation comments surfaces as emailHint on flagged guests', async () => {
   const noEmail = row({ LAST: 'Hinted', EMAIL: '' });
   const fine = row({ LAST: 'Fine', EMAIL: 'jane@example.com' });

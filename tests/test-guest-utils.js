@@ -997,6 +997,10 @@ describe('matchesGuestName', () => {
   test('short last names cannot hide inside unrelated locals', () => {
     assert.ok(!matchesGuestName('kaleema@corp.com', 'Lee'));
     assert.ok(matchesGuestName('lee.wong@corp.com', 'Lee')); // exact token still fine
+    // 4-letter surnames common in this market must not substring-match either.
+    assert.ok(!matchesGuestName('primavera@viajes.com', 'Vera'));
+    assert.ok(!matchesGuestName('larosa@travelco.com', 'Rosa'));
+    assert.ok(matchesGuestName('vera@corp.com', 'Vera')); // exact token still fine
   });
 
   test('null/empty inputs never match', () => {
@@ -1007,12 +1011,46 @@ describe('matchesGuestName', () => {
   });
 });
 
+describe('isAgentEmail name-match acceptance', () => {
+  test('agent-domain cleared when local part carries the guest last name', () => {
+    assert.equal(
+      isAgentEmail({ email: 'maria.gonzalez@petravel.com', firstName: 'Maria', lastName: 'Gonzalez' }),
+      null
+    );
+  });
+
+  test('still agent-domain when lastName is absent or does not match', () => {
+    assert.equal(
+      isAgentEmail({ email: 'maria.gonzalez@petravel.com', firstName: 'Maria' }),
+      'agent-domain'
+    );
+    assert.equal(
+      isAgentEmail({ email: 'andrea@venicetravel.com.br', firstName: 'Eduardo', lastName: 'Mendes' }),
+      'agent-domain'
+    );
+  });
+
+  test('booking proxies are never cleared by a name match', () => {
+    assert.equal(
+      isAgentEmail({ email: 'diez.123@guest.booking.com', firstName: 'Phil', lastName: 'Diez' }),
+      'booking-proxy'
+    );
+  });
+});
+
 describe('parseConfirmedEmails', () => {
   test('parses comma-separated addresses, lowercased and trimmed', () => {
-    const set = parseConfirmedEmails(' Guest@Corp.COM , other@host.br ,, ');
-    assert.equal(set.size, 2);
-    assert.ok(set.has('guest@corp.com'));
-    assert.ok(set.has('other@host.br'));
+    const map = parseConfirmedEmails(' Guest@Corp.COM , other@host.br ,, ');
+    assert.equal(map.size, 2);
+    assert.ok(map.has('guest@corp.com'));
+    assert.ok(map.has('other@host.br'));
+    assert.equal(map.get('guest@corp.com'), null); // unscoped
+  });
+
+  test('lastname:address entries carry the last-name scope', () => {
+    const map = parseConfirmedEmails('Diez:phil@gmail.com, plain@host.com');
+    assert.equal(map.get('phil@gmail.com'), 'diez');
+    assert.equal(map.get('plain@host.com'), null);
   });
 
   test('entries without @ are dropped; empty env yields empty set', () => {

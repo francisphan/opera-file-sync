@@ -22,6 +22,15 @@ const AGENT_DOMAIN_KEYWORDS = [
   'centurioncard', 'vendor@'
 ];
 
+// OTA proxy relay domains → flag category. Single source of truth: also
+// interpolated into the best-email SQL ranking in opera-db-query.js and used
+// to screen hint candidates in findEmailInText — add new relay domains
+// (Airbnb, Agoda, …) HERE only.
+const OTA_PROXY_DOMAINS = {
+  'guest.booking.com': 'booking-proxy',
+  'expediapartnercentral.com': 'expedia-proxy',
+};
+
 const KNOWN_PROVIDERS = ['gmail', 'yahoo', 'hotmail', 'outlook', 'aol', 'icloud', 'mail'];
 
 const DISPOSABLE_DOMAINS = new Set([
@@ -250,12 +259,21 @@ function isAgentEmail(customer) {
   const email = (customer.email || '').toLowerCase();
   const firstName = (customer.firstName || '').trim();
 
-  if (email.indexOf('guest.booking.com') !== -1) return 'booking-proxy';
-  if (email.indexOf('expediapartnercentral.com') !== -1) return 'expedia-proxy';
+  for (const [domain, category] of Object.entries(OTA_PROXY_DOMAINS)) {
+    if (email.indexOf(domain) !== -1) return category;
+  }
 
   if (firstName === '' || firstName === '.' || firstName === 'TBC') return 'missing-first-name';
 
-  if (hasAgentDomainKeyword(email)) return 'agent-domain';
+  if (hasAgentDomainKeyword(email)) {
+    // A company-domain address carrying the guest's own last name is the
+    // guest's mailbox, not an agent's — pass lastName to opt in. This applies
+    // to BOTH the front-desk report and the SF sync path (such guests now
+    // sync instead of being silently dropped as agents); callers omitting
+    // lastName keep the strict behavior.
+    if (matchesGuestName(email, customer.lastName)) return null;
+    return 'agent-domain';
+  }
 
   return null;
 }
@@ -335,26 +353,37 @@ function matchesGuestName(email, lastName) {
   for (const word of normalize(lastName).split(/[^a-z]+/).filter(Boolean)) {
     if (word.length >= 3 && tokens.includes(word)) return true;
     // Substring match catches initial-suffixed forms (danerim, jbledel) but
-    // needs a longer word so e.g. "Lee" can't hide inside an unrelated local.
-    if (word.length >= 4 && localCompact.includes(word)) return true;
+    // needs a longer word: 4-letter surnames common in this market hide
+    // inside unrelated locals ("Vera" in primavera@, "Rosa" in larosa@).
+    if (word.length >= 5 && localCompact.includes(word)) return true;
   }
   return false;
 }
 
 /**
  * Parse FRONT_DESK_CONFIRMED_EMAILS — addresses front desk has verified
- * against the guest at check-in — into a lowercase Set. Matching guests skip
- * all email flags and the SMTP probe in the missing-info report.
- * @param {string} envValue - e.g. "guest@corp.com, other@host.br"
- * @returns {Set<string>} Lowercased addresses
+ * against the guest at check-in. Matching guests skip all email flags and the
+ * SMTP probe in the missing-info report. An entry may be a bare address, or
+ * "lastname:address" to also require the guest's last name — scoping guards
+ * against a stale entry going green for a different guest years later (OPERA
+ * profile merges reattach addresses).
+ * @param {string} envValue - e.g. "guest@corp.com, diez:other@host.br"
+ * @returns {Map<string,string|null>} Lowercased address → required lowercased
+ *   last name, or null for an unscoped entry
  */
 function parseConfirmedEmails(envValue) {
-  return new Set(
-    (envValue || '')
-      .split(',')
-      .map((s) => s.trim().toLowerCase())
-      .filter((s) => s.includes('@'))
-  );
+  const map = new Map();
+  for (const raw of (envValue || '').split(',')) {
+    const entry = raw.trim().toLowerCase();
+    if (!entry.includes('@')) continue;
+    const colon = entry.indexOf(':');
+    if (colon > 0 && colon < entry.indexOf('@')) {
+      map.set(entry.slice(colon + 1).trim(), entry.slice(0, colon).trim());
+    } else {
+      map.set(entry, null);
+    }
+  }
+  return map;
 }
 
 /**
@@ -383,7 +412,7 @@ function findEmailInText(text) {
     const cleaned = sanitizeEmail(candidate);
     if (!cleaned) continue;
     const lower = cleaned.toLowerCase();
-    if (lower.includes('guest.booking.com') || lower.includes('expediapartnercentral.com')) continue;
+    if (Object.keys(OTA_PROXY_DOMAINS).some((d) => lower.includes(d))) continue;
     if (isRoleMailbox(cleaned)) continue;
     // Never suggest a travel-agency mailbox — swapping one agent address for
     // another is the exact trap the agent-domain flag exists to prevent.
@@ -671,6 +700,7 @@ async function verifyEmailsSMTP(emails) {
 
 module.exports = {
   AGENT_DOMAIN_KEYWORDS,
+  OTA_PROXY_DOMAINS,
   DISPOSABLE_DOMAINS,
   ROLE_MAILBOX_LOCAL_PARTS,
   sanitizeEmail,
