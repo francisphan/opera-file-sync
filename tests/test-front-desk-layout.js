@@ -97,11 +97,15 @@ test('CSV attachment still carries notes as a column', () => {
   assert.ok(built.csv.includes('csv note text'));
 });
 
-test('posting-master notes render as a colspan-4 sub-row', () => {
+test('posting masters no longer appear in the daily report (split to their own email)', () => {
   const built = build(report({
-    postingMasters: [guest({ villa: '9041', notes: 'group charges' })],
+    inHouse: [guest()],
+    postingMasters: [guest({ villa: '9041', firstName: 'PM', lastName: 'Group' })],
   }));
-  assert.match(built.htmlBody, /<td colspan="4"[^>]*>group charges<\/td>/);
+  assert.ok(!built.htmlBody.includes('Posting Masters'));
+  assert.ok(!built.htmlBody.includes('PM Group'));
+  // A report holding ONLY posting masters has nothing left to send.
+  assert.equal(build(report({ postingMasters: [guest({ villa: '9041' })] })), null);
 });
 
 test('plain-text body and subject are unchanged in shape', () => {

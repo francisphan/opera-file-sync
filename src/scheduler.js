@@ -185,6 +185,75 @@ function setupFrontDeskReport(notifier, dailyStats, queryFn) {
 }
 
 /**
+ * Setup the posting-masters report. Posting Masters (9000-series charge
+ * accounts) were split out of the daily front desk report onto a reduced
+ * twice-a-week cadence because the list rarely changes. Fires on the configured
+ * days of week (default Mon & Thu) and reuses the front-desk query — it only
+ * emails the postingMasters slice of that report.
+ * @param {Notifier} notifier - Notifier instance
+ * @param {Function} queryFn - Async function(dateStr) returning front-desk report data (with .postingMasters)
+ * @returns {Object|null} Scheduled job object or null
+ */
+function setupPostingMastersReport(notifier, queryFn) {
+  const enabled = process.env.ENABLE_POSTING_MASTERS_REPORT !== 'false';
+  // Recipient resolution lives in the notifier; here we just need to know
+  // whether *some* recipient is reachable before scheduling.
+  const to = process.env.POSTING_MASTERS_EMAIL_TO || process.env.FRONT_DESK_EMAIL_TO;
+
+  if (!enabled || !to) {
+    logger.info(to
+      ? 'Posting masters report disabled (ENABLE_POSTING_MASTERS_REPORT=false)'
+      : 'Posting masters report not configured (set POSTING_MASTERS_EMAIL_TO or FRONT_DESK_EMAIL_TO)');
+    return null;
+  }
+
+  const timezone = process.env.DAILY_SUMMARY_TIMEZONE || 'America/Argentina/Buenos_Aires';
+  // Twice a week: comma-separated days of week (0=Sun … 6=Sat). Default Mon & Thu.
+  const daysOfWeek = (process.env.POSTING_MASTERS_REPORT_DOW || '1,4')
+    .split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+  const [hour, minute] = (process.env.POSTING_MASTERS_REPORT_TIME || '7:00').split(':').map(Number);
+  if (isNaN(hour) || isNaN(minute)) {
+    logger.error(`Invalid POSTING_MASTERS_REPORT_TIME format: ${process.env.POSTING_MASTERS_REPORT_TIME}. Expected "HH:MM"`);
+    return null;
+  }
+
+  const rule = new schedule.RecurrenceRule();
+  rule.dayOfWeek = daysOfWeek;
+  rule.hour = hour;
+  rule.minute = minute;
+  rule.tz = timezone;
+
+  const job = schedule.scheduleJob(rule, async () => {
+    logger.info('Running scheduled posting masters report');
+    try {
+      const today = argTodayStr(timezone);
+      const reportData = await queryFn(today);
+      await notifier.sendPostingMastersReport(reportData);
+    } catch (err) {
+      logger.error('Error sending posting masters report:', err.message);
+      if (err.stack) logger.error(err.stack);
+    }
+  });
+
+  logger.info(`Posting masters report scheduled twice-weekly (days ${daysOfWeek.join(',')}, ${hour}:${String(minute).padStart(2, '0')} ${timezone}) → ${to}`);
+  return job;
+}
+
+/**
+ * Manually run the posting-masters report (for the standalone script / testing).
+ * @param {Notifier} notifier
+ * @param {Function} queryFn - async (dateStr) => front-desk report data (with .postingMasters)
+ * @param {Object} [opts] - { to, cc, date, timezone }
+ */
+async function triggerPostingMastersReport(notifier, queryFn, opts = {}) {
+  const timezone = opts.timezone || process.env.DAILY_SUMMARY_TIMEZONE || 'America/Argentina/Buenos_Aires';
+  const date = opts.date || argTodayStr(timezone);
+  logger.info(`Manually running posting masters report for ${date}`);
+  const reportData = await queryFn(date);
+  return notifier.sendPostingMastersReport(reportData, opts.to, opts.cc);
+}
+
+/**
  * Setup weekly villa-map refresh from the renumbering Google Sheet.
  * The map is cached locally; this just keeps the cache fresh in case the
  * sheet ever changes. Refresh is non-fatal (keeps the cached map on failure).
@@ -339,9 +408,11 @@ async function triggerVillaNightsReport(notifier, queryFns, opts = {}) {
 module.exports = {
   setupDailySummary,
   setupFrontDeskReport,
+  setupPostingMastersReport,
   setupVillaMapRefresh,
   setupVillaNightsReport,
   computeOutlookWindows,
   triggerDailySummary,
-  triggerVillaNightsReport
+  triggerVillaNightsReport,
+  triggerPostingMastersReport
 };
