@@ -181,6 +181,20 @@ test('FRONT_DESK_CONFIRMED_EMAILS suppresses the email flag for that address onl
   }
 });
 
+test('FRONT_DESK_CONFIRMED_EMAILS also covers addresses sanitizeEmail rejects', async () => {
+  process.env.FRONT_DESK_CONFIRMED_EMAILS = 'jane@company.digital';
+  try {
+    const report = await queryFrontDeskReport(
+      mockClient([row({ LAST: 'OddTld', EMAIL: 'Jane@Company.DIGITAL' })]),
+      DATE
+    );
+    // .digital fails sanitizeEmail's 6-char TLD cap — confirmation must still match.
+    assert.ok(!dqEntry(report, 'OddTld').missing.includes('Email'));
+  } finally {
+    delete process.env.FRONT_DESK_CONFIRMED_EMAILS;
+  }
+});
+
 test('email found in reservation comments surfaces as emailHint on flagged guests', async () => {
   const noEmail = row({ LAST: 'Hinted', EMAIL: '' });
   const fine = row({ LAST: 'Fine', EMAIL: 'jane@example.com' });

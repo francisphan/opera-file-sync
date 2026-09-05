@@ -255,19 +255,28 @@ function isAgentEmail(customer) {
 
   if (firstName === '' || firstName === '.' || firstName === 'TBC') return 'missing-first-name';
 
-  // Match keywords against domain part only to avoid false positives
-  // (e.g., 'preserv@gmail.com' should NOT match 'reserv')
-  // Keywords containing '@' (like 'vendor@') match the full email instead
-  const atIndex = email.indexOf('@');
-  const domain = atIndex !== -1 ? email.substring(atIndex + 1) : '';
+  if (hasAgentDomainKeyword(email)) return 'agent-domain';
+
+  return null;
+}
+
+/**
+ * Returns true if the email's domain matches an AGENT_DOMAIN_KEYWORDS entry.
+ * Keywords match against the domain part only to avoid false positives
+ * (e.g., 'preserv@gmail.com' must NOT match 'reserv'); keywords containing
+ * '@' (like 'vendor@') match the full email instead.
+ */
+function hasAgentDomainKeyword(email) {
+  const lower = (email || '').toLowerCase();
+  const atIndex = lower.indexOf('@');
+  const domain = atIndex !== -1 ? lower.substring(atIndex + 1) : '';
 
   for (const keyword of AGENT_DOMAIN_KEYWORDS) {
     const kw = keyword.toLowerCase();
-    const target = kw.includes('@') ? email : domain;
-    if (target.indexOf(kw) !== -1) return 'agent-domain';
+    const target = kw.includes('@') ? lower : domain;
+    if (target.indexOf(kw) !== -1) return true;
   }
-
-  return null;
+  return false;
 }
 
 /**
@@ -361,11 +370,24 @@ function findEmailInText(text) {
   if (!text || typeof text !== 'string') return null;
   const matches = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [];
   for (const raw of matches) {
-    const cleaned = sanitizeEmail(raw.replace(/^[._%+-]+/, ''));
+    let candidate = raw.replace(/^[._%+-]+/, '');
+    // Free text runs sentences together ("jane@gmail.com.Thanks") and the
+    // greedy domain match swallows the next word. Real TLDs are lowercase, so
+    // peel capitalized trailing segments while the domain keeps 2+ labels.
+    const [local, domain] = candidate.split('@');
+    const labels = domain.split('.');
+    while (labels.length > 2 && !/^[a-z0-9]+$/.test(labels[labels.length - 1])) {
+      labels.pop();
+    }
+    candidate = `${local}@${labels.join('.')}`;
+    const cleaned = sanitizeEmail(candidate);
     if (!cleaned) continue;
     const lower = cleaned.toLowerCase();
     if (lower.includes('guest.booking.com') || lower.includes('expediapartnercentral.com')) continue;
     if (isRoleMailbox(cleaned)) continue;
+    // Never suggest a travel-agency mailbox — swapping one agent address for
+    // another is the exact trap the agent-domain flag exists to prevent.
+    if (hasAgentDomainKeyword(lower)) continue;
     if (lower.endsWith('@vinesofmendoza.com') || lower.endsWith('@vinesresortandspa.com')) continue;
     return cleaned;
   }

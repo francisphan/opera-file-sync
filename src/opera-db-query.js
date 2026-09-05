@@ -985,25 +985,24 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
     JOIN OPERA.NAME n ON rn.NAME_ID = n.NAME_ID
       AND n.NAME_TYPE = 'D'
     LEFT JOIN (
-      -- Best email per guest: primary EMAIL row first, then any EMAIL row,
-      -- then any phone row holding an address (front desk sometimes types the
-      -- email under a phone type like HOME — it must not read as "no email").
-      -- OTA proxy relays rank below everything: a Booking.com relay marked
-      -- primary must not shadow the real address the guest gave at check-in
-      -- (keep the domain list in step with isAgentEmail in guest-utils.js).
+      -- Best email per guest, tiered: real EMAIL rows first (primary, then
+      -- any), then a plausible address typed under a phone type like HOME
+      -- (must not read as "no email"), then OTA proxy relays (a Booking.com
+      -- relay marked primary must not shadow the real address the guest gave
+      -- at check-in — keep the domains in step with isAgentEmail), and junk
+      -- '@'-bearing phone rows dead last so they can't shadow the relay.
       SELECT NAME_ID, PHONE_NUMBER,
              ROW_NUMBER() OVER (
                PARTITION BY NAME_ID
                ORDER BY CASE
                           WHEN LOWER(PHONE_NUMBER) LIKE '%guest.booking.com%'
-                            OR LOWER(PHONE_NUMBER) LIKE '%expediapartnercentral.com%' THEN 1
-                          ELSE 0
-                        END,
-                        CASE
+                            OR LOWER(PHONE_NUMBER) LIKE '%expediapartnercentral.com%' THEN 3
                           WHEN PHONE_ROLE = 'EMAIL' AND PRIMARY_YN = 'Y' THEN 0
                           WHEN PHONE_ROLE = 'EMAIL' THEN 1
-                          ELSE 2
+                          WHEN PHONE_NUMBER LIKE '%@%.%' AND PHONE_NUMBER NOT LIKE '% %' THEN 2
+                          ELSE 4
                         END,
+                        CASE WHEN PRIMARY_YN = 'Y' THEN 0 ELSE 1 END,
                         UPDATE_DATE DESC NULLS LAST, INSERT_DATE DESC NULLS LAST
              ) AS RNK
       FROM OPERA.NAME_PHONE
@@ -1141,9 +1140,11 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
       companions: []
     };
 
-    // Check for bad/agent email
+    // Check for bad/agent email. Confirmation matches the RAW address so front
+    // desk can also confirm values sanitizeEmail rejects (odd TLDs, etc.) —
+    // those are exactly the ones that otherwise re-flag every morning.
     const cleanedEmail = sanitizeEmail(rawEmail);
-    const emailConfirmed = !!cleanedEmail && confirmedEmails.has(cleanedEmail.toLowerCase());
+    const emailConfirmed = !!emailLower && confirmedEmails.has(emailLower);
     let badReason = null;
     if (emailConfirmed) {
       // Front desk verified this address with the guest — leave it alone.
@@ -1268,9 +1269,11 @@ async function queryFrontDeskReport(oracleClient, dateStr) {
 
     // Channel feeds (Synxis) write the booker's real address into reservation
     // comments — when the profile email is missing/flagged, surface it so front
-    // desk doesn't have to dig through OPERA for it.
+    // desk doesn't have to dig through OPERA for it. 'missing-first-name' is
+    // about the NAME, not the email — a hint there would invite overwriting a
+    // perfectly good address.
     let emailHint = null;
-    if (badReason) {
+    if (badReason && badReason !== 'missing-first-name') {
       emailHint = findEmailInText([guest.notesRaw, guest.cashierRaw].filter(Boolean).join(' | '));
       if (emailHint && emailHint.toLowerCase() === (guest.email || '').trim().toLowerCase()) emailHint = null;
     }

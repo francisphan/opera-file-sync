@@ -1047,6 +1047,18 @@ describe('findEmailInText', () => {
     assert.equal(findEmailInText('see mailto:jane@example.com.'), 'jane@example.com');
   });
 
+  test('run-together sentence words after the address are peeled off', () => {
+    assert.equal(findEmailInText('contact jane@gmail.com.Thanks for booking'), 'jane@gmail.com');
+    assert.equal(findEmailInText('email jane@gmail.com.Regards'), 'jane@gmail.com');
+    // Real multi-label domains keep their lowercase country suffix.
+    assert.equal(findEmailInText('mail paulo@empresa.com.br today'), 'paulo@empresa.com.br');
+  });
+
+  test('travel-agency addresses are never suggested as hints', () => {
+    assert.equal(findEmailInText('agency: mariana@venicetravel.com.br'), null);
+    assert.equal(findEmailInText('via sergio@alchemydmc.com'), null);
+  });
+
   test('returns null for empty or email-free text', () => {
     assert.equal(findEmailInText(null), null);
     assert.equal(findEmailInText(''), null);
