@@ -145,3 +145,76 @@ test('guest inheriting a PM-prefixed room from a skipped parent is diverted to p
   assert.equal(report.postingMasters.length, 1);
   assert.equal(report.postingMasters[0].lastName, 'OnMaster');
 });
+
+test('agent-domain email carrying the guest last name is not flagged; a stranger name still is', async () => {
+  const report = await queryFrontDeskReport(
+    mockClient([
+      row({ FIRST: 'Maria', LAST: 'Gonzalez', EMAIL: 'maria.gonzalez@petravel.com' }),
+      row({ FIRST: 'Eduardo', LAST: 'Mendes', EMAIL: 'andrea@venicetravel.com.br' }),
+    ]),
+    DATE
+  );
+  const cleared = dqEntry(report, 'Gonzalez');
+  assert.ok(cleared, 'guest still present via completeness flags');
+  assert.ok(!cleared.missing.includes('Email'));
+  const flagged = dqEntry(report, 'Mendes');
+  assert.ok(flagged.missing.includes('Email'));
+  assert.equal(flagged.reason, 'agent-domain');
+});
+
+test('FRONT_DESK_CONFIRMED_EMAILS suppresses the email flag for that address only', async () => {
+  process.env.FRONT_DESK_CONFIRMED_EMAILS = ' Booked.123@Guest.Booking.COM ';
+  try {
+    const report = await queryFrontDeskReport(
+      mockClient([
+        row({ LAST: 'Confirmed', EMAIL: 'booked.123@guest.booking.com' }),
+        row({ LAST: 'Unconfirmed', EMAIL: 'other.456@guest.booking.com' }),
+      ]),
+      DATE
+    );
+    assert.ok(!dqEntry(report, 'Confirmed').missing.includes('Email'));
+    const other = dqEntry(report, 'Unconfirmed');
+    assert.ok(other.missing.includes('Email'));
+    assert.equal(other.reason, 'booking-proxy');
+  } finally {
+    delete process.env.FRONT_DESK_CONFIRMED_EMAILS;
+  }
+});
+
+test('email found in reservation comments surfaces as emailHint on flagged guests', async () => {
+  const noEmail = row({ LAST: 'Hinted', EMAIL: '' });
+  const fine = row({ LAST: 'Fine', EMAIL: 'jane@example.com' });
+  const client = {
+    query: async (sql) => {
+      if (sql.includes('FROM OPERA.RESERVATION_NAME rn')) return [noEmail, fine];
+      if (sql.includes('FROM OPERA.RESERVATION_COMMENT')) {
+        return [
+          { RESV_NAME_ID: noEmail.RESV_NAME_ID, COMMENT_TYPE: 'RESERVATION', COMMENTS: 'Synxis: contact brennen@properic.com' },
+          { RESV_NAME_ID: fine.RESV_NAME_ID, COMMENT_TYPE: 'RESERVATION', COMMENTS: 'contact someone@elsewhere.com' },
+        ];
+      }
+      return [];
+    },
+  };
+  const report = await queryFrontDeskReport(client, DATE);
+  assert.equal(dqEntry(report, 'Hinted').emailHint, 'brennen@properic.com');
+  // Unflagged email ⇒ no hint even though the comments hold an address.
+  assert.equal(dqEntry(report, 'Fine').emailHint, null);
+});
+
+test('emailHint is suppressed when the comment address is the flagged address itself', async () => {
+  const guest = row({ LAST: 'SameAddr', EMAIL: 'andrea@venicetravel.com.br' });
+  const client = {
+    query: async (sql) => {
+      if (sql.includes('FROM OPERA.RESERVATION_NAME rn')) return [guest];
+      if (sql.includes('FROM OPERA.RESERVATION_COMMENT')) {
+        return [{ RESV_NAME_ID: guest.RESV_NAME_ID, COMMENT_TYPE: 'RESERVATION', COMMENTS: 'agency contact Andrea@VeniceTravel.com.br on file' }];
+      }
+      return [];
+    },
+  };
+  const report = await queryFrontDeskReport(client, DATE);
+  const entry = dqEntry(report, 'SameAddr');
+  assert.ok(entry.missing.includes('Email'));
+  assert.equal(entry.emailHint, null);
+});

@@ -301,6 +301,78 @@ function isExcludedGuest(guest, excludedNames) {
 }
 
 /**
+ * True when the email's local part clearly carries the guest's own last name,
+ * so a corporate/company-domain address is treated as the guest's rather than
+ * a travel agent's (christian.cavanagh@bbva.com, danerim@bbva.com).
+ *
+ * Deliberately last-name-only: agents routinely book from first-name mailboxes
+ * (andrea@venicetravel...) that can coincide with a guest's first name, so a
+ * first-name match proves nothing. Accents are stripped before comparing and
+ * short name words (de, da, van) are ignored.
+ * @param {string} email - Sanitized email address
+ * @param {string} lastName - Guest's last name as it appears on the reservation
+ * @returns {boolean}
+ */
+function matchesGuestName(email, lastName) {
+  if (!email || !lastName || typeof email !== 'string') return false;
+  const at = email.indexOf('@');
+  if (at <= 0) return false;
+  const normalize = (s) => String(s)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  const local = normalize(email.substring(0, at));
+  const localCompact = local.replace(/[^a-z]/g, '');
+  const tokens = local.split(/[^a-z]+/).filter(Boolean);
+  for (const word of normalize(lastName).split(/[^a-z]+/).filter(Boolean)) {
+    if (word.length >= 3 && tokens.includes(word)) return true;
+    // Substring match catches initial-suffixed forms (danerim, jbledel) but
+    // needs a longer word so e.g. "Lee" can't hide inside an unrelated local.
+    if (word.length >= 4 && localCompact.includes(word)) return true;
+  }
+  return false;
+}
+
+/**
+ * Parse FRONT_DESK_CONFIRMED_EMAILS — addresses front desk has verified
+ * against the guest at check-in — into a lowercase Set. Matching guests skip
+ * all email flags and the SMTP probe in the missing-info report.
+ * @param {string} envValue - e.g. "guest@corp.com, other@host.br"
+ * @returns {Set<string>} Lowercased addresses
+ */
+function parseConfirmedEmails(envValue) {
+  return new Set(
+    (envValue || '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.includes('@'))
+  );
+}
+
+/**
+ * Scan free-text notes/comments for a usable email address. Synxis and other
+ * channel feeds write the booker's real address into reservation comments, so
+ * when a guest's profile email is missing or flagged this can hand front desk
+ * a lead instead of a dead end. Proxy relays, role mailboxes, and the hotel's
+ * own domains never count.
+ * @param {string} text - Concatenated notes/comments
+ * @returns {string|null} First plausible address found, or null
+ */
+function findEmailInText(text) {
+  if (!text || typeof text !== 'string') return null;
+  const matches = text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [];
+  for (const raw of matches) {
+    const cleaned = sanitizeEmail(raw.replace(/^[._%+-]+/, ''));
+    if (!cleaned) continue;
+    const lower = cleaned.toLowerCase();
+    if (lower.includes('guest.booking.com') || lower.includes('expediapartnercentral.com')) continue;
+    if (isRoleMailbox(cleaned)) continue;
+    if (lower.endsWith('@vinesofmendoza.com') || lower.endsWith('@vinesresortandspa.com')) continue;
+    return cleaned;
+  }
+  return null;
+}
+
+/**
  * Map Oracle language codes to Salesforce picklist values
  * @param {string} oracleLanguage - Language code from Oracle NAME.LANGUAGE
  * @returns {string} Salesforce Language__c picklist value (English, Spanish, Portuguese, Unknown)
@@ -587,6 +659,9 @@ module.exports = {
   isProviderTypo,
   parseExcludedGuestNames,
   isExcludedGuest,
+  matchesGuestName,
+  parseConfirmedEmails,
+  findEmailInText,
   transformToContact,
   transformToTVRSGuest,
   mapLanguageToSalesforce,
