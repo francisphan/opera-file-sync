@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs><clipPath id="c"><circle cx="256" cy="256" r="252"/></clipPath></defs>
+  <circle cx="256" cy="256" r="252" fill="#4B5A73"/>
+  <g clip-path="url(#c)" stroke-linejoin="round">
+    <!-- red bellhop jacket with brass buttons -->
+    <path d="M100,520 C118,448 168,404 256,398 C344,404 394,448 412,520 Z" fill="#D62830"/>
+    <path d="M212,400 L256,452 L300,400 Z" fill="#F7F3EC"/>
+    <path d="M190,408 L256,470 L322,408" fill="none" stroke="#E2B23A" stroke-width="8" stroke-linecap="round"/>
+    <circle cx="256" cy="486" r="8" fill="#E2B23A"/>
+    <!-- big corgi ears -->
+    <path d="M140,224 L124,62 L236,146 Z" fill="#D9853B" stroke="#D9853B" stroke-width="28"/>
+    <path d="M372,224 L388,62 L276,146 Z" fill="#D9853B" stroke="#D9853B" stroke-width="28"/>
+    <path d="M156,194 L148,108 L208,154 Z" fill="#F2C6A8" stroke="#F2C6A8" stroke-width="12"/>
+    <path d="M356,194 L364,108 L304,154 Z" fill="#F2C6A8" stroke="#F2C6A8" stroke-width="12"/>
+    <!-- head -->
+    <path d="M178,144 L334,144 L392,226 L384,298 L302,384 L210,384 L128,298 L120,226 Z" fill="#D9853B" stroke="#D9853B" stroke-width="18"/>
+    <!-- white blaze and muzzle -->
+    <path d="M244,150 L268,150 L276,226 L332,284 L322,348 L256,388 L190,348 L180,284 L236,226 Z" fill="#F7F3EC" stroke="#F7F3EC" stroke-width="8"/>
+    <!-- eyes -->
+    <circle cx="200" cy="244" r="16" fill="#1E2029"/>
+    <circle cx="312" cy="244" r="16" fill="#1E2029"/>
+    <!-- nose, smile and tongue -->
+    <path d="M232,294 L280,294 L256,322 Z" fill="#1E2029" stroke="#1E2029" stroke-width="10"/>
+    <path d="M240,342 Q256,370 272,342 Z" fill="#E86A6A"/>
+    <path d="M256,324 L256,340" stroke="#1E2029" stroke-width="7" stroke-linecap="round"/>
+    <path d="M226,334 Q240,350 256,340 Q272,350 286,334" fill="none" stroke="#1E2029" stroke-width="7" stroke-linecap="round"/>
+    <!-- red pillbox bellhop cap with a brass band, tipped to one side -->
+    <g transform="rotate(-12 256 120)">
+      <path d="M204,92 L308,92 L312,140 L200,140 Z" fill="#D62830" stroke="#D62830" stroke-width="10"/>
+      <rect x="198" y="124" width="116" height="14" fill="#E2B23A"/>
+      <ellipse cx="256" cy="90" rx="54" ry="10" fill="#B01E26"/>
+    </g>
+    <!-- brass front-desk service bell, mid "ding" -->
+    <g transform="translate(-34 -12)">
+      <rect x="306" y="448" width="132" height="18" rx="6" fill="#1E2029"/>
+      <rect x="314" y="440" width="116" height="12" rx="5" fill="#3A3D48"/>
+      <path d="M322,442 C322,386 422,386 422,442 Z" fill="#E2B23A"/>
+      <path d="M338,428 C340,408 356,398 372,396" fill="none" stroke="#F6D77A" stroke-width="7" stroke-linecap="round"/>
+      <rect x="366" y="378" width="12" height="14" rx="3" fill="#B98A1E"/>
+      <ellipse cx="372" cy="376" rx="16" ry="6" fill="#E2B23A"/>
+      <path d="M332,372 L318,358 M372,350 L372,334 M412,372 L426,358" stroke="#F6D77A" stroke-width="6" stroke-linecap="round"/>
+    </g>
+  </g>
+</svg>

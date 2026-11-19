@@ -1,5 +1,7 @@
 # OPERA Sync → Salesforce
 
+<img src="docs/assets/guest-sync.png" alt="Guest Sync mascot: a corgi in a red bellhop cap and jacket with a brass front-desk bell" width="96">
+
 Syncs OPERA PMS guest records to the `TVRS_Guest__c` custom object in Salesforce by polling the OPERA Oracle database directly.
 
 **Key Features:**
